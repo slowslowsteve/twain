@@ -77,3 +77,16 @@ work protection across project switches, and a verified duplication policy.
 If parentage is ambiguous, refuse automatic copying rather than guess. An
 explicit "Copy Twain from..." choice may be needed for duplicates if no
 reliable origin is exposed; that decision belongs after the hardware test.
+
+### 0.8.1 loading memory
+
+Project reads stage only actual PCM and validated clip metadata, rather than
+creating another four full-capacity engines. CRC, lengths, settings and project
+identity are checked before replacement. The render/MIDI/status paths yield
+exclusive engine access while the file worker copies validated PCM into existing
+60-second buffers and clears effect tails. No file I/O, allocation or bulk copy
+runs on the render path. New projects need no second audio workspace.
+
+CI repeats the project round-trip/recovery suite with an 800 MiB address-space
+limit, below the previous loader's full duplicate-engine requirement. The file
+format is unchanged; older project files remain supported.

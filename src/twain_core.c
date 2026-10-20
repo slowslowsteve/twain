@@ -159,6 +159,9 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
     tw_io_poll(t);
     if (n <= 0) return;
     if (n > 128) n = 128;
+    if(atomic_load_explicit(&t->io.state,memory_order_acquire)==5) {
+        memset(out,0,(size_t)n*MARK_CH*sizeof(int16_t));return;
+    }
     int16_t warm[256];float peak=0;
     for(int i=0;i<n;i++)for(int c=0;c<2;c++) {
         float raw=in?in[i*2+c]/32768.0f:0;
@@ -354,6 +357,7 @@ void twain_set_param(twain_t *t, const char *key, const char *val) {
 int twain_get_param(twain_t *t, const char *key, char *buf, int n) {
     tw_io_poll(t);
     int project=tw_io_get(t,key,buf,n);if(project>=0)return project;
+    if(atomic_load_explicit(&t->io.state,memory_order_acquire)==5)return snprintf(buf,n,"");
     if (!strcmp(key, "twain_status")) {
         char state[TW_SCENES][256],armed[192];int ap=0;
         armed[ap++]='[';
@@ -407,6 +411,7 @@ int twain_get_param(twain_t *t, const char *key, char *buf, int n) {
 }
 void twain_on_midi(twain_t *t, const uint8_t *msg, int n, int source) {
     tw_io_poll(t);
+    if(atomic_load_explicit(&t->io.state,memory_order_acquire)==5)return;
     if (n > 0) {
         if (msg[0] == 0xfa || msg[0] == 0xfb) {
             int from_stop=t->transport_stopped || !t->clock_running;

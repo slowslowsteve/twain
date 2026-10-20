@@ -34,6 +34,12 @@ jobs:
           node-version: '22'
       - name: Test Mark and Twain
         run: make test
+      - name: Load projects within an 800 MiB address-space budget
+        run: |
+          # Full-capacity engine plus compact saved PCM fits; cloning another
+          # complete engine bank (the previous loader) exceeds this limit.
+          ulimit -v 819200
+          ./build/twain_projects_sim
       - name: Check Twain with sanitizers
         run: make twain-sanitize
         env:

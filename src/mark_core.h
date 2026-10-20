@@ -160,6 +160,7 @@ int mark_clip_custom(mark_t *, int);
 int mark_project_safe(mark_t *);
 int mark_project_export(mark_t *, int, mark_clip_snapshot_t *);
 int16_t *mark_project_buffer(mark_t *, int);
+void mark_project_replace(mark_t *, const mark_clip_snapshot_t *);
 int mark_project_import(mark_t *, int, const mark_clip_snapshot_t *);
 #endif
 

@@ -1567,6 +1567,19 @@ int mark_project_import(mark_t *m,int i,const mark_clip_snapshot_t *s) {
     t->g_cur=t->clip_muted?0:t->level/100.0f;m->grid_unit=s->grid;
     return 1;
 }
+/* Worker-only, after complete file validation and exclusive-access handoff.
+ * Reuse full-capacity buffers; resetting effect tails never runs on render. */
+void mark_project_replace(mark_t *m,const mark_clip_snapshot_t *clips) {
+    reset_undo(m);m->swap_track=-1;m->grid_unit=0;
+    m->clock_running=0;m->transport_paused=0;
+    for(int i=0;i<MARK_TRACKS;i++) {
+        track_clear(m,i);
+        memset(&m->t[i].clipfx,0,sizeof m->t[i].clipfx);
+        if(clips[i].full_len)memcpy(m->t[i].buf,clips[i].audio,
+            (size_t)clips[i].full_len*MARK_CH*sizeof(int16_t));
+        (void)mark_project_import(m,i,&clips[i]);
+    }
+}
 int mark_clip_has_audio(mark_t *m,int ti) {
     return m->t[ti].len>0 || m->t[ti].rec_len>0;
 }

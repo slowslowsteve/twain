@@ -153,6 +153,14 @@ int main(void) {
         char k[32],v[16];snprintf(k,sizeof k,"%c_t%d_lp",'a'+scene,clip);snprintf(v,sizeof v,"%d",scene*10+clip);expect(t,k,v);
         snprintf(k,sizeof k,"%c_t%d_comp_attack",'a'+scene,clip);expect(t,k,"35");
     }
+    // Replacing an occupied workspace with a new project reuses buffers but
+    // clears every clip, including the layers omitted by legacy saves.
+    twain_set_param(t,"project_new","1");wait_job(t,0);
+    for(int scene=0;scene<4;scene++)for(int clip=1;clip<=8;clip++) {
+        char k[32];snprintf(k,sizeof k,"%c_t%d_len",'a'+scene,clip);expect(t,k,"0");
+        snprintf(k,sizeof k,"%c_t%d_lp",'a'+scene,clip);expect(t,k,"0");
+        snprintf(k,sizeof k,"%c_t%d_level",'a'+scene,clip);expect(t,k,"50");
+    }
     twain_destroy(t);unlink(fileA);unlink(fileB);unlink(bad);rmdir(root);
     puts("Twain projects: all 32 clips round-trip, legacy 16-clip loading, CRC failure isolation, duplicate copy, late identity change and failed-save recovery passed");
 }

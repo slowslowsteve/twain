@@ -78,7 +78,7 @@ static int tw_mkdirs(const char *root) {
     return 1;
 }
 static void tw_release_staged(tw_project_io *io) {
-    for(int i=0;i<4;i++)if(io->staged[i]) { mark_destroy(io->staged[i]);io->staged[i]=NULL; }
+    for(int i=0;i<4;i++)for(int j=0;j<MARK_TRACKS;j++) { free(io->staged[i][j]);io->staged[i][j]=NULL; }
 }
 static int tw_file(twain_t *t,int writing) {
     tw_project_io *io=&t->io;char path[480],temp[480];
@@ -92,11 +92,6 @@ static int tw_file(twain_t *t,int writing) {
     tw_stream s={f,0xffffffffu,writing,0};int result=2;
     if(!tw_header(&s,io,!writing))goto finish;
     for(int scene=0;scene<4;scene++) {
-        if(!writing) {
-            io->staged[scene]=mark_create_in_dir(t->host,t->module_dir[0]?t->module_dir:NULL);
-            if(!io->staged[scene]) { result=4;goto finish; }
-            mark_set_param(io->staged[scene],"monitor","0");
-        }
         for(int clip=0;clip<io->file_layers;clip++) {
             mark_clip_snapshot_t *c=&io->clips[scene][clip];
             c->len=tw_u32(&s,c->len);c->full_len=tw_u32(&s,c->full_len);
@@ -111,10 +106,15 @@ static int tw_file(twain_t *t,int writing) {
                !isfinite(c->grid)||c->grid<0||c->grid>MARK_SR*60.0)goto finish;
             /* Twain is deployed only to little-endian ARM64; host tests are LE.
              * Format fields are explicitly LE, PCM is interleaved signed 16-bit LE. */
-            if(!writing)c->audio=mark_project_buffer(io->staged[scene],clip);
+            if(!writing) {
+                size_t bytes=(size_t)c->full_len*MARK_CH*sizeof(int16_t);
+                io->staged[scene][clip]=bytes?malloc(bytes):NULL;
+                if(bytes && !io->staged[scene][clip]) { result=4;goto finish; }
+                c->audio=io->staged[scene][clip];
+            }
             tw_bytes(&s,c->audio,(size_t)c->full_len*MARK_CH*sizeof(int16_t));
             if(s.failed)goto finish;
-            if(!writing && !mark_project_import(io->staged[scene],clip,c))goto finish;
+
         }
     }
     {
@@ -167,19 +167,27 @@ static void *tw_worker(void *arg) {
         int state=atomic_load_explicit(&io->state,memory_order_acquire);
         if(state==1) {
             atomic_store(&io->state,2);
+            if(io->op==2 || io->op==4) {
+                memset(io->clips,0,sizeof io->clips);
+                for(int i=0;i<4;i++)for(int j=0;j<MARK_TRACKS;j++)
+                    for(int k=0;k<19;k++)io->clips[i][j].settings[k]=mark_clip_default(k);
+            }
             if(io->op==1)io->result=tw_file(t,1);
             else if(io->op==2)io->result=tw_file(t,0);
             else if(io->op==3)io->result=tw_catalog(io);
             else {
                 io->result=0;
                 for(int i=0;i<4;i++) {
-                    io->staged[i]=mark_create_in_dir(t->host,t->module_dir[0]?t->module_dir:NULL);
-                    if(!io->staged[i]) { io->result=4;break; }
-                    mark_set_param(io->staged[i],"monitor","0");io->bars[i]=1;io->starts[i]=0;
+                    io->bars[i]=1;io->starts[i]=0;
                 }
                 io->active=0;io->master=100;io->mute=0;io->input_level=io->monitor_level=100;
             }
             atomic_store_explicit(&io->state,3,memory_order_release);
+        } else if(state==5) {
+            /* Audio thread granted exclusive engine access. No allocation or
+             * fallible I/O remains; the validated PCM fits existing buffers. */
+            for(int i=0;i<4;i++)mark_project_replace(t->scene[i],io->clips[i]);
+            atomic_store_explicit(&io->state,6,memory_order_release);
         } else if(state==4) {
             tw_release_staged(io);
             atomic_store_explicit(&io->state,0,memory_order_release);
@@ -198,17 +206,21 @@ static void tw_io_destroy(twain_t *t) {
 }
 static void tw_io_poll(twain_t *t) {
     tw_project_io *io=&t->io;
-    if(atomic_load_explicit(&io->state,memory_order_acquire)!=3)return;
+    int state=atomic_load_explicit(&io->state,memory_order_acquire);
+    if(state!=3 && state!=6)return;
     if(!io->result && (io->op==2 || io->op==4)) {
-        if(strcmp(io->live,io->target) || io->live_gen!=io->job_gen)io->result=5;
+        if(state==3 && (strcmp(io->live,io->target) || io->live_gen!=io->job_gen))io->result=5;
+        else if(state==3) {
+            atomic_store_explicit(&io->state,5,memory_order_release);return;
+        }
         else {
-            for(int i=0;i<4;i++) { mark_t *old=t->scene[i];t->scene[i]=io->staged[i];io->staged[i]=old;t->bars[i]=io->bars[i];t->starts[i]=io->starts[i]; }
+            for(int i=0;i<4;i++) { t->bars[i]=io->bars[i];t->starts[i]=io->starts[i]; }
             t->active=io->active;t->input_level=io->input_level;t->monitor_level=io->monitor_level;t->master_level=io->master;t->master_mute=io->mute;t->master_gain=0;
             t->pending=-1;t->phase=t->starts[t->active];t->clock_running=t->clock_ticks=t->cycle_due=t->bar_due=0;
             t->transport_stopped=1;t->input_monitor=0;t->count_in=t->advance_last=t->click_left=0;memset(t->armed,0,sizeof t->armed);
             t->history_head=t->history_count=t->redo_count=0;t->gesture_scene=t->gesture_clip=-1;t->gesture_saved=0;
             t->master_editing=t->master_saved=0;
-            memcpy(io->loaded,io->target,37);tw_name(io->name,io->live_name);
+            memcpy(io->loaded,io->target,37);tw_name(io->name,io->target_name);
             io->revision++;io->saved_revision=io->revision;
             if(io->op==4 || (io->op==2 && strcmp(io->source,io->target)))io->saved_revision--;
         }
@@ -246,6 +258,7 @@ static int tw_io_param(twain_t *t,const char *key,const char *val) {
     memcpy(io->target,op==1?io->loaded:io->live,37);
     snprintf(io->source,sizeof io->source,"%s",op==2?val:"");
     tw_name(io->job_name,op==1?io->name:io->live_name);
+    tw_name(io->target_name,io->live_name);
     io->job_gen=io->live_gen;io->job_revision=io->revision;
     atomic_store_explicit(&io->state,1,memory_order_release);return 1;
 }
