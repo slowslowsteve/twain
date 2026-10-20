@@ -51,3 +51,45 @@ assert.equal(writes.length,count+1); // only project_live re-established
 status.dirty=1;live={ready:true,id:A,name:'Set A',generation:3};ctl.tick(true);ctl.move(1);ctl.click();assert.equal(pending.key,'project_load');
 complete(2);assert.equal(status.id,B);assert.equal(ctl.view().mode,'error');assert(ctl.dirty);
 console.log('Twain project UI: first-open choice, Save retry, dirty switch protection, copy confirmation and pending identity gate passed');
+
+// A dropped ID must not be cached; a stale result is not a new request's result.
+{
+ const s={id:'',dirty:0,busy:0,result:7,serial:10};
+ let dropped=true,engineId='',deferred=null;
+ const sent=[];
+ const c=createProjectController({probe:()=>({ready:true,id:B,name:'Set 26',generation:26}),
+  get:k=>k==='project_status'?JSON.stringify(s):'',
+  set:(k,v)=>{
+   sent.push([k,v]);
+   if(k==='project_live') {if(dropped){dropped=false;return false;}engineId=v.split('\n')[0];return true;}
+   // Accepted by the host mailbox; engine hasn't serviced it yet.
+   deferred=k;return true;
+  }});
+ c.tick(true);assert.equal(c.view().mode,'identity');assert.equal(deferred,null);
+ c.tick(true);assert.equal(engineId,B);assert.equal(deferred,'project_load');
+ c.tick(true);assert.equal(c.view().mode,'busy'); // ignore the old result=7
+ assert.equal(sent.filter(([k])=>k==='project_load').length,1);
+ s.serial++;s.result=1;c.tick(true);assert.equal(deferred,'project_new');
+ s.serial++;s.result=0;s.id=B;s.dirty=1;c.tick(true);assert(c.guard());
+ // Rejected operation surfaces a communication error and keeps the old workspace.
+ let reject=true;
+ const r=createProjectController({probe:()=>({ready:true,id:A,name:'Set 26',generation:27}),
+  get:k=>k==='project_status'?JSON.stringify({...s,dirty:0}):'',
+  set:(k,v)=>{sent.push([k,v]);if(k==='project_live')return true;if(reject){reject=false;return false;}s.serial++;s.busy=1;return true;}});
+ r.tick(true);assert.equal(r.view().mode,'error');assert.equal(s.id,B);
+ const before=sent.length;r.click();assert.equal(r.view().mode,'busy');
+ assert.equal(sent[before][0],'project_live');assert.equal(sent[before+1][0],'project_load');
+}
+console.log('Twain project UI: dropped identity retry, stale-result isolation, same-name IDs and acknowledged Retry passed');
+
+// A host that accepts but never delivers a command gets a bounded retry screen.
+{
+ const savedNow=Date.now;let clock=1000;
+ try {
+  Date.now=()=>clock;
+  const c=createProjectController({probe:()=>({ready:true,id:A,name:'Set 26',generation:1}),
+   get:k=>k==='project_status'?JSON.stringify({id:'',dirty:0,busy:0,result:7,serial:0}):'',set:()=>true});
+  c.tick(true);assert.equal(c.view().mode,'busy');clock+=5001;c.tick(true);
+  assert.equal(c.view().mode,'error');assert.equal(c.view().detail,'Move link busy');
+ } finally {Date.now=savedNow;}
+}

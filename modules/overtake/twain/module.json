@@ -2,7 +2,7 @@
   "id": "twain",
   "name": "Twain",
   "abbrev": "TWN",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Four scenes with eight clips each, selected-clip FX, input monitoring and project saves",
   "dsp": "dsp.so",
   "ui": "ui.js",

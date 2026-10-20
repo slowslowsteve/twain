@@ -1,4 +1,4 @@
-# Twain 0.6.1 prototype
+# Twain 0.6.2 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -121,6 +121,9 @@ Undo restores audio and control values, not FX tail memory. Five preallocated
 Twain now selects a save by Move's persistent project UUID, using the installed
 host's live model generation before and after the `active_set` query. It does
 not use pad position, project-name guesses or active_set.txt as a save target.
+Project-ID handoffs and save/load/new requests use acknowledged host writes.
+Retry resends the live ID, and completion requires the engine request serial
+to advance; a dropped write cannot reuse an old operation result.
 A missing, pending, unaligned or stale identity blocks edits and loads instead
 of associating recordings with the wrong set. This live API integration still
 requires an on-Move pass; the read-only hardware tests confirmed disk IDs for

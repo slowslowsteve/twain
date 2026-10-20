@@ -1,16 +1,30 @@
 /* Project selection and confirmations; no file I/O and no audio ownership here. */
 import {probeProjectIdentity} from './twain_project_identity.mjs';
-const errors=['','No Twain save yet','Save damaged or unsupported','Disk operation failed','Not enough memory','Move project changed','Finish recording first','Save Move project first'];
+const errors=['','No Twain save yet','Save damaged or unsupported','Disk operation failed','Not enough memory','Move project changed','Finish recording first','Move ID not received'];
 export function createProjectController({get,set,probe=probeProjectIdentity,notice=()=>{}}) {
     let status=null,live=null,mode='identity',action=null,choices=[],selection=0;
-    let message='Waiting for Move',copy=null,failedAction=null,seenLive='',replace='',kept='',lastCheck=-Infinity;
+    let message='Waiting for Move',copy=null,failedAction=null,seenLive=null,replace='',kept='',lastCheck=-Infinity;
     const readStatus=()=>{
         try { const s=JSON.parse(get('project_status'));if(s && typeof s.id==='string')status=s; }
         catch (_) {}
         return status;
     };
+    function syncLive(force=false) {
+        const signature=live?`${live.id}\n${live.generation}\n${live.name}`:'';
+        if(force || signature!==seenLive) {
+            // Never remember a project handoff that the host refused to deliver.
+            if(set('project_live',signature)===false) { seenLive=null;return false; }
+            seenLive=signature;
+        }
+        return true;
+    }
     function request(key,value,kind) {
-        set(key,value);action={kind,target:live?.id || '',source:value};mode='busy';message=kind.startsWith('save')?'Saving Twain...':kind==='catalog'?'Reading saves...':'Loading Twain...';
+        const done={kind,target:live?.id || '',source:value,serial:readStatus()?.serial,at:Date.now()};
+        // Resend on every operation, including Retry: a previous UI may have cached a lost ID.
+        if(!syncLive(true) || set(key,value)===false) {
+            failedAction=done;mode='error';message='Move link busy';selection=0;return;
+        }
+        action=done;mode='busy';message=kind.startsWith('save')?'Saving Twain...':kind==='catalog'?'Reading saves...':'Loading Twain...';
         readStatus();
     }
     function load() { request('project_load',live.id,'load'); }
@@ -26,6 +40,7 @@ export function createProjectController({get,set,probe=probeProjectIdentity,noti
     }
     function evaluate() {
         if(!status || !live || action)return;
+        if(status.busy) { mode='identity';message='Finishing Twain task';return; }
         if(status.id===live.id) { kept='';replace='';mode='performance';return; }
         if(kept===live.id) { mode='kept';return; }
         if(status.dirty && replace!==live.id) { mode='unsaved';selection=0;return; }
@@ -52,14 +67,18 @@ export function createProjectController({get,set,probe=probeProjectIdentity,noti
         const current=probe();
         if(current.ready) {
             live=current;
-            const signature=`${live.id}\n${live.generation}\n${live.name}`;
-            if(signature!==seenLive) { set('project_live',signature);seenLive=signature; }
+            if(!syncLive()) { mode='identity';message='Connecting to Move';return; }
         } else {
             live=null;
-            if(seenLive!=='') { set('project_live','');seenLive=''; }
+            syncLive();
             if(!action) { mode='identity';message=current.reason?.includes('persistent')?'Save Move project first':'Waiting for Move'; }
         }
-        if(action && status && !status.busy)finish();
+        if(action && status && !status.busy) {
+            if(status.serial!==action.serial)finish();
+            else if(Date.now()-action.at>5000) {
+                failedAction=action;action=null;mode='error';message='Move link busy';selection=0;
+            }
+        }
         if(!action && live && (mode==='identity'||mode==='performance'||mode==='kept'))evaluate();
         // A native switch also invalidates source/confirmation menus for the previous target.
         if(live && ['source','copy','unsaved','unsavedCopy','error'].includes(mode) && targetId && targetId!==live.id) {

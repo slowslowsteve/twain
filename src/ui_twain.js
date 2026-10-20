@@ -7,7 +7,7 @@ import { announce } from '/data/UserData/schwung/shared/screen_reader.mjs';
 const dspGet=host_module_get_param, dspSet=host_module_set_param;
 // Critical monitor switches must survive the host's busy fire-and-forget mailbox.
 const dspCritical=typeof host_module_set_param_blocking==='function'?host_module_set_param_blocking:dspSet;
-const projects=createProjectController({get:dspGet,set:dspSet,notice:text=>notice(text)});
+const projects=createProjectController({get:dspGet,set:(key,value)=>dspCritical(key,value,500),notice:text=>notice(text)});
 const FX=['hp','lp','comp','sat','chorus','reverb','delay','delay_rate'];
 const FX_NAMES=['HP filter','LP filter','Compression','Drive','Chorus','Reverb','Delay','Delay rate'];
 const RATES=['1/1','1/2','1/2T','1/4','1/4T','1/8','1/8T','1/16','1/16T','1/32','1/32T','1/64'];
