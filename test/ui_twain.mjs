@@ -136,3 +136,7 @@ assert(rects.every(([x,y,w,h])=>x>=0&&y>=0&&w>=0&&h>=0&&x+w<=128&&y+h<=64));
 state.bars[0]=1;state.phase=0.5;rects.length=0;context.onResume();
 assert(rects.some(([x,y,w,h])=>x===3&&y===56&&w===61&&h===5));
 assert(!text.some(s=>s.includes('Tap clip:')||s.includes('Hold Loop:')||s.includes('Vol / FX')));
+
+// Twain master level updates only its persistent row, with no transient duplicate.
+text.length=0;params.set('master_level','100');cc(49);cc(79,125);cc(49,0);
+assert(!text.some(s=>s.startsWith('Twain volume:')));

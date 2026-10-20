@@ -11,8 +11,8 @@ class Clock extends Date { static now(){return now;} }
 const constants={MoveKnob1:71,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,MoveLoop:58,MoveUndo:56,MoveMainKnob:14,MoveMainButton:3,MoveShift:49,MoveMute:88,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
 const context=vm.createContext({Date:Clock,host_move_model_state:()=>ready?[1,7,7]:[1,8,7],
  shadow_get_param:(slot,key)=>{assert.equal(slot,0);assert.equal(key,'active_set');return `${id}\nSet A\n7`;},
- host_module_get_param:key=>key==='project_status'?JSON.stringify(status):key==='twain_status'?JSON.stringify(state):key==='project_name'?'Set A':'0',
- host_module_set_param:(key,value)=>{writes.push([key,value]);if(key==='project_save'){status.busy=1;status.serial++;}},
+ host_module_get_param:key=>key==='project_status'?JSON.stringify(status):key==='twain_status'?JSON.stringify(state):key==='project_name'?'Set A':key==='master_level'?String(state.master):'0',
+ host_module_set_param:(key,value)=>{writes.push([key,value]);if(key==='master_level')state.master=Number(value);if(key==='project_save'){status.busy=1;status.serial++;}},
  shadow_set_overtake_suppress_master_volume:value=>claims.push(value),
  clear_screen:()=>{frame=[];},print:(x,y,text)=>frame.push(text),fill_rect(){}});
 const cache=new Map();
@@ -31,6 +31,7 @@ midi(0xb0,3);assert(writes.some(([key])=>key==='project_save'));assert(frame.inc
 let start=writes.length;midi(0x90,92);midi(0x80,92,0);assert(!writes.slice(start).some(([key])=>key.endsWith('_clip')));
 status.busy=0;status.dirty=0;now+=600;context.tick();assert(!frame.includes('*'));
 start=writes.length;midi(0x90,92);midi(0x80,92,0);assert(writes.slice(start).some(([key])=>key==='a_t1_clip'));
+midi(0xb0,49);midi(0xb0,79,125);midi(0xb0,49,0);assert(frame.includes('Twain 97%'));assert(!frame.some(s=>s.startsWith('Twain volume:')));
 ready=false;now+=600;context.tick();assert(frame.includes('Waiting for Move'));
 start=writes.length;midi(0x90,92);midi(0x80,92,0);assert(!writes.slice(start).some(([key])=>key.endsWith('_clip')));
 assert(writes.some(([key,value])=>key==='project_live'&&value===''));

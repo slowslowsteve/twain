@@ -209,6 +209,7 @@ static void tw_io_poll(twain_t *t) {
 static int tw_io_param(twain_t *t,const char *key,const char *val) {
     tw_project_io *io=&t->io;
     if(!strcmp(key,"project_live")) {
+        io->identity_enabled=1;
         char id[37];unsigned generation=0;int used=0;
         if(sscanf(val,"%36[^\n]\n%u%n",id,&generation,&used)==2 && tw_uuid(id) && generation && val[used]=='\n') {
             memcpy(io->live,id,37);io->live_gen=generation;tw_name(io->live_name,val+used+1);

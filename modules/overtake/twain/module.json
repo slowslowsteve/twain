@@ -2,7 +2,7 @@
   "id": "twain",
   "name": "Twain",
   "abbrev": "TWN",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Four-scene audio clip launcher: four clips per scene, quantized launch and stop, seven clip FX, mutes and project saves",
   "dsp": "dsp.so",
   "ui": "ui.js",

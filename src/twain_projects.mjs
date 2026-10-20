@@ -34,13 +34,14 @@ export function createProjectController({get,set,probe=probeProjectIdentity,noti
     function finish() {
         const done=action;action=null;
         if(status.result) {
-            if(done.kind==='load' && status.result===1) { request('project_catalog','1','catalog');return; }
+            if(done.kind==='load' && status.result===1) { request('project_new','1','new');return; }
             if(status.result===5) { mode='identity';return; }
             failedAction=done;mode='error';message=errors[status.result] || 'Project operation failed';selection=0;return;
         }
         if(done.kind==='catalog') { chooseSource();return; }
-        if(done.kind==='save' || done.kind==='saveSwitch') {
+        if(done.kind==='save' || done.kind==='saveSwitch' || done.kind==='saveCopy') {
             notice(status.dirty?'Changed during save':'Twain saved');
+            if(done.kind==='saveCopy' && !status.dirty) { request('project_catalog','1','catalog');return; }
             if(done.kind==='saveSwitch' && live && !status.dirty) { replace=live.id;load();return; }
         }
         mode='performance';replace='';evaluate();
@@ -61,17 +62,24 @@ export function createProjectController({get,set,probe=probeProjectIdentity,noti
         if(action && status && !status.busy)finish();
         if(!action && live && (mode==='identity'||mode==='performance'||mode==='kept'))evaluate();
         // A native switch also invalidates source/confirmation menus for the previous target.
-        if(live && ['source','copy','unsaved','error'].includes(mode) && targetId && targetId!==live.id) {
+        if(live && ['source','copy','unsaved','unsavedCopy','error'].includes(mode) && targetId && targetId!==live.id) {
             replace='';kept='';mode='identity';evaluate();
         }
         if(live)targetId=live.id;
     }
     let targetId='';
-    function click() {
+    function click(copyMenu=false) {
         const previousTarget=targetId;
         tick(true);if(!status || !live || status.busy || (previousTarget && previousTarget!==targetId))return;
         if(mode==='performance') {
-            if(status.dirty)request('project_save','1','save');else notice('Twain saved');
+            if(copyMenu) {
+                if(status.dirty) { mode='unsavedCopy';selection=0; }
+                else request('project_catalog','1','catalog');
+            } else if(status.dirty)request('project_save','1','save');else notice('Twain saved');
+        } else if(mode==='unsavedCopy') {
+            if(selection===0)request('project_save','1','saveCopy');
+            else if(selection===1)request('project_catalog','1','catalog');
+            else mode='performance';
         } else if(mode==='unsaved') {
             if(selection===0)request('project_save','1','saveSwitch');
             else if(selection===1) { replace=live.id;load(); }
@@ -94,14 +102,15 @@ export function createProjectController({get,set,probe=probeProjectIdentity,noti
     }
     function move(delta) {
         if(!delta)return;
-        const count=mode==='unsaved'?3:mode==='source'?choices.length:mode==='copy'||mode==='error'?2:0;
+        const count=(mode==='unsaved'||mode==='unsavedCopy')?3:mode==='source'?choices.length:mode==='copy'||mode==='error'?2:0;
         if(count)selection=Math.max(0,Math.min(count-1,selection+(delta>0?1:-1)));
     }
     function view() {
         const currentName=live?.name || get('project_name') || 'Twain';
         let title=currentName,detail='',choice='';
         if(mode==='unsaved') { title='Unsaved Twain';detail=get('project_name') || 'Previous project';choice=['Save then switch','Discard and switch','Cancel'][selection]; }
-        else if(mode==='source') { detail='No Twain save. Choose:';choice=choices[selection]?.name || ''; }
+        else if(mode==='unsavedCopy') { title='Unsaved Twain';detail='Before copying';choice=['Save then copy','Discard then copy','Cancel'][selection]; }
+        else if(mode==='source') { detail='Choose Twain source:';choice=choices[selection]?.name || ''; }
         else if(mode==='copy') { title='Copy Twain from';detail=copy.name;choice=['Copy into this set','Cancel'][selection]; }
         else if(mode==='busy'||mode==='identity')detail=message;
         else if(mode==='error') { title='Twain kept intact';detail=message;choice=[failedAction?.kind.startsWith('save')?'Retry save':'Retry project load','Cancel'][selection]; }

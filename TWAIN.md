@@ -1,4 +1,4 @@
-# Twain 0.5.0 prototype
+# Twain 0.5.1 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -32,7 +32,7 @@ of stereo capacity at 44.1 kHz.
   clip's mute; either press order works, and a multi-clip mute chord works too.
   Neither mute stops transport, changes clip volume, or launches clips.
 - Hold a clip and turn knobs 1–7 for HP filter, LP filter, compression,
-  saturation, chorus, reverb and delay. Knob 8 chooses a quantized delay rate.
+  Drive, chorus, reverb and delay. Knob 8 chooses a quantized delay rate.
   Unheld FX knobs do nothing. Touch a knob while holding a clip to see its
   value; two separate touches within 600 ms reset it. Turns cancel the tap
   sequence. Effects reset to zero, volume to 100%, delay rate to 1/8.
@@ -73,10 +73,13 @@ and LED reliability still require a hardware pass.
 ## Effects and undo
 
 Reverb uses eight damped parallel combs and four serial allpass diffusers per
-channel for a denser tail on percussion. Delay amount increases both send and
+channel for a denser tail on percussion. Its return is now stronger, with
+a slight reduction in dry signal at high amounts; the decay remains unchanged. Delay amount increases both send and
 feedback, capped at 72%; the feedback loop is damped and all repeats decay.
 Compression blends hard-knee 12:1 compression with up to 18 dB automatic makeup.
-Saturation has RMS compensation without makeup gain. All effects are per clip;
+Drive replaces the former saturation with four-times interpolated soft clipping,
+a gentle asymmetric curve, tone filtering and DC removal. It retains RMS
+compensation without makeup gain; saved `sat` values remain compatible. All effects are per clip;
 sound quality and CPU with four fully effected clips need listening on Move.
 
 Knob 8 rates, shortest to longest counterclockwise:
@@ -102,10 +105,14 @@ requires an on-Move pass; the read-only hardware tests confirmed disk IDs for
 Set 23, a new Set 24 and its copy, not the execution of the in-module gate.
 
 - On opening a known project, its Twain save loads automatically.
-- On a project with no Twain save, turn the main jog knob to choose **Start
-  empty** or a saved Twain project as the source. Press it to select. Copying
-  requires a second confirmation and creates an independent workspace for
-  the current Move project. No name-based source is silently guessed.
+- On a project with no Twain save, Twain starts empty automatically. Outgoing
+  audio is held silent whenever the live identity is unknown or differs from
+  the loaded workspace, including while parked in the background. Old data
+  remains intact until loading/creating the new workspace succeeds.
+- **Shift + press the main jog knob** opens the copy/source menu when needed.
+  Turn the jog to choose a save and press to select; confirm copying. Dirty
+  current work gets Save/Discard/Cancel protection before opening that menu.
+  Copies are independent and do not overwrite their source.
 - **Press the main jog knob to Save.** An ASCII star `*` at the top right
   indicates unsaved changes. A completed save clears it; failed saves keep
   the workspace dirty. Newly started empty projects and copied projects also
@@ -129,7 +136,8 @@ Set 23, a new Set 24 and its copy, not the execution of the in-module gate.
 Files are separate from exported `.ablbundle` files, at
 `/data/UserData/schwung/twain-projects/<UUID>.twp`. Deleting a native project
 leaves its Twain save recoverable as a copy source. Nothing auto-deletes saves.
-The source list shows up to 64 saved workspaces. An exported/imported Move
+Twain master volume is shown only in its persistent row, without a second
+transient volume overlay. The source list shows up to 64 saved workspaces. An exported/imported Move
 bundle does NOT currently carry Twain audio; keep these files when backing up.
 No Schwung files or shortcuts are modified.
 

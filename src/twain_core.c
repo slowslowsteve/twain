@@ -132,7 +132,7 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
     tw_io_poll(t);
     if (n <= 0) return;
     if (n > 128) n = 128;
-    if (t->transport_stopped) { memset(out, 0, (size_t)n * 2 * sizeof(*out)); return; }
+    if ((t->io.identity_enabled && (!t->io.live[0] || strcmp(t->io.live,t->io.loaded))) || t->transport_stopped) { memset(out, 0, (size_t)n * 2 * sizeof(*out)); return; }
     if (t->cycle_due) cycle(t);
     else if (t->bar_due) { launch_armed(t, t->clock_ticks==0); t->bar_due = 0; }
     int done = 0;

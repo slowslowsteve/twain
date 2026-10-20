@@ -7,7 +7,7 @@ import { announce } from '/data/UserData/schwung/shared/screen_reader.mjs';
 const dspGet=host_module_get_param, dspSet=host_module_set_param;
 const projects=createProjectController({get:dspGet,set:dspSet,notice:text=>notice(text)});
 const FX=['hp','lp','comp','sat','chorus','reverb','delay','delay_rate'];
-const FX_NAMES=['HP filter','LP filter','Compression','Saturation','Chorus','Reverb','Delay','Delay rate'];
+const FX_NAMES=['HP filter','LP filter','Compression','Drive','Chorus','Reverb','Delay','Delay rate'];
 const RATES=['1/1','1/2','1/2T','1/4','1/4T','1/8','1/8T','1/16','1/16T','1/32','1/32T','1/64'];
 let snapshot=null, held=null, rec=false, del=false, loop=false, editScene=0;
 let pressed=new Map(), shift=false, mute=false, muteUsed=false;
@@ -179,7 +179,7 @@ globalThis.onMidiMessageInternal=function(data) {
     if(type===0xb0 && note===MoveMainKnob) { projects.move(decodeDelta(value));paint();return; }
     if(type===0xb0 && note===MoveMainButton && value>0) {
         endEdit();endMasterEdit();for(const clip of pressed.values())clip.used=true;
-        projects.click();refresh();return;
+        projects.click(shift);refresh();return;
     }
     const release=type===0x80 || (type===0x90 && value===0) || (type===0xb0 && value===0);
     const nativeVolume=type===0xb0 && note===MoveMaster && !held && !shift;
@@ -190,7 +190,7 @@ globalThis.onMidiMessageInternal=function(data) {
         const down=type===0x90 && value>=64;
         if(note===8 && shift && down) {
             for(const clip of pressed.values())clip.used=true;
-            notice(`Twain volume: ${dspGet('master_level')}%`);
+            poll();
         }
         else if(held) {
             if(down && !held.touches[note])knobTouch(note===8?MoveMaster:MoveKnob1+note);
@@ -238,7 +238,7 @@ globalThis.onMidiMessageInternal=function(data) {
                 if(typeof shadow_set_overtake_suppress_master_volume==='function' && delta) {
                     const next=Math.max(0,Math.min(200,Number(dspGet('master_level'))+delta));
                     if(!masterEditing) { dspSet('master_edit_begin','1');masterEditing=true; }
-                    dspSet('master_level',String(next));notice(`Twain volume: ${next}%`);
+                    dspSet('master_level',String(next));poll();
                 } else if(typeof shadow_set_overtake_suppress_master_volume!=='function')notice('Host: no Twain volume');
             } else if(held) {
                 held.used=true;

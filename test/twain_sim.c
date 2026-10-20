@@ -175,7 +175,7 @@ static void test_clip_fx(void) {
         }
         if(effect<2)assert(after<before*0.3);
         if(effect==2)assert(after>before*1.5 && after<before*4.0);
-        if(effect==3)assert(after>before*0.8 && after<before*1.05);
+        if(effect==3) { assert(after>before*0.8 && after<before*1.05);assert(difference>before*0.01); }
         if(effect==4)assert(difference>before*0.01);
         if(effect>=5)assert(tail>100);
         free(f);

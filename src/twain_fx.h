@@ -14,6 +14,7 @@ typedef struct {
     float rate_mix;
     float amount[7], hp_a, lp_a, hp_z[2], lp_z[2];
     float env, dry_power, sat_power, phase, echo_damping[2];
+    float drive_previous[2], drive_tone[2], drive_dc_x[2], drive_dc_y[2];
     float delay[2][TW_DELAY], chorus[2][TW_CHORUS];
     float reverb[2][8][TW_REV], damping[2][8];
     float diffuser[2][4][1024];
@@ -65,16 +66,30 @@ static void twain_fx_run(twain_fx_t *f, float *left, float *right, float bar_fra
     float threshold=0.35f*powf(0.05f/0.35f,f->amount[2]);
     float gain=f->env>threshold ? powf(threshold/f->env,11.0f/12.0f) : 1.0f;
     for(int c=0;c<2;c++) x[c]*=(1.0f+(gain-1.0f)*f->amount[2])*powf(10.0f,0.9f*f->amount[2]);
-    float drive=1.0f+49.0f*f->amount[3];
-    float sat[2]={tanhf(x[0]*drive),tanhf(x[1]*drive)};
+    /* Four-times interpolated soft drive: gentle odd/even harmonics, with
+     * an internal tone low-pass and DC blocker instead of 50x hard flattening. */
+    float drive=1.0f+11.0f*f->amount[3], bias=0.08f*f->amount[3];
+    float sat[2];
+    for(int c=0;c<2;c++) {
+        float sum=0;
+        for(int k=1;k<=4;k++) {
+            float input=f->drive_previous[c]+(x[c]-f->drive_previous[c])*(k*0.25f);
+            float z=input*drive+bias;
+            float shaped=z/(1.0f+fabsf(z))-bias/(1.0f+bias);
+            f->drive_tone[c]+=(shaped-f->drive_tone[c])*0.18f;
+            sum+=f->drive_tone[c]*0.25f;
+        }
+        f->drive_previous[c]=x[c];
+        sat[c]=sum-f->drive_dc_x[c]+0.997f*f->drive_dc_y[c];
+        f->drive_dc_x[c]=sum;f->drive_dc_y[c]=sat[c];
+    }
     float dry=(x[0]*x[0]+x[1]*x[1])*0.5f;
     float wet=(sat[0]*sat[0]+sat[1]*sat[1])*0.5f;
-    f->dry_power+=(dry-f->dry_power)*0.002f;
-    f->sat_power+=(wet-f->sat_power)*0.002f;
-    /* RMS compensation tracks the drive, and cannot add makeup gain. */
+    f->dry_power+=(dry-f->dry_power)*0.0005f;
+    f->sat_power+=(wet-f->sat_power)*0.0005f;
     float norm=sqrtf((f->dry_power+1e-12f)/(f->sat_power+1e-12f));
-    if(norm>1.0f) norm=1.0f;
-    for(int c=0;c<2;c++) x[c]+=(sat[c]*norm-x[c])*f->amount[3];
+    if(norm>1.0f)norm=1.0f;
+    for(int c=0;c<2;c++)x[c]+=(sat[c]*norm-x[c])*f->amount[3];
     f->phase+=0.000015f;
     if(f->phase>=1) f->phase-=1;
     /* Dense, damped parallel combs followed by four serial allpasses. */
@@ -114,7 +129,9 @@ static void twain_fx_run(twain_fx_t *f, float *left, float *right, float bar_fra
         float send=f->amount[6], feedback=0.15f+0.57f*send;
         f->echo_damping[c]+=(echo[1-c]-f->echo_damping[c])*0.45f;
         f->delay[c][f->dw]=x[c]*send+f->echo_damping[c]*feedback;
-        x[c]+=rev*f->amount[5]+echo[c]*send*0.8f;
+        /* Stronger room return and a little dry reduction, same decay time. */
+        float room=f->amount[5];
+        x[c]=x[c]*(1.0f-0.2f*room)+rev*(2.5f*room)+echo[c]*send*0.8f;
         if(!isfinite(x[c]))x[c]=0;
         if(x[c]>1)x[c]=1;
         if(x[c]<-1)x[c]=-1;

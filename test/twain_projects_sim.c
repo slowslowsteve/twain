@@ -73,6 +73,17 @@ int main(void) {
     }
     twain_set_param(t,"b_t2_mute","1");twain_set_param(t,"master_level","81");twain_set_param(t,"master_mute","1");
     for(int i=0;i<4;i++) { char k[32],v[8];snprintf(k,sizeof k,"%c_scene_bars",'a'+i);snprintf(v,sizeof v,"%d",i+1);twain_set_param(t,k,v); }
+    // The outgoing audio must be silent as soon as the live identity changes.
+    twain_set_param(t,"master_mute","0");
+    { int16_t in[256]={0},out[256];
+      for(int n=0;n<40;n++)twain_process(t,in,out,128);
+      live(t,B,2,"Other project");twain_process(t,in,out,128);
+      for(int n=0;n<256;n++)assert(out[n]==0);
+      twain_set_param(t,"project_live","");twain_process(t,in,out,128);
+      for(int n=0;n<256;n++)assert(out[n]==0);
+      live(t,A,1,"Set A");
+    }
+    twain_set_param(t,"master_mute","1");
     twain_set_param(t,"project_save","1");wait_job(t,0);
     char status[512];twain_get_param(t,"project_status",status,sizeof status);assert(strstr(status,"\"dirty\":0"));
     char fileA[512],fileB[512];snprintf(fileA,sizeof fileA,"%s/%s.twp",root,A);snprintf(fileB,sizeof fileB,"%s/%s.twp",root,B);

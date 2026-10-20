@@ -24,8 +24,7 @@ function complete(result=0) {
  ctl.tick(true);
 }
 ctl.tick(true);assert.equal(pending.key,'project_load');assert.equal(pending.value,A);
-complete(1);assert.equal(pending.key,'project_catalog');complete();
-assert.equal(ctl.view().mode,'source');ctl.click();assert.equal(pending.key,'project_new');complete();assert(ctl.guard());
+complete(1);assert.equal(pending.key,'project_new');complete();assert(ctl.guard());
 status.dirty=1;ctl.tick(true);assert(ctl.dirty);ctl.click();assert.equal(pending.key,'project_save');
 complete(3);assert.equal(ctl.view().mode,'error');assert(ctl.dirty);assert.equal(ctl.view().choice,'Retry save');
 ctl.click();assert.equal(pending.key,'project_save');complete();assert(!ctl.dirty);
@@ -37,7 +36,8 @@ ctl.move(1);assert.equal(ctl.view().choice,'Cancel');ctl.click();assert.equal(ct
 assert.equal(status.id,A);ctl.click();assert.equal(ctl.view().mode,'unsaved');
 // Save first targets the bound old project, then attempts the current project.
 ctl.click();assert.equal(pending.key,'project_save');complete();assert.equal(pending.key,'project_load');assert.equal(pending.value,B);
-complete(1);complete();assert.equal(ctl.view().mode,'source');
+complete(1);assert.equal(pending.key,'project_new');complete();assert(ctl.guard());
+ctl.click(true);assert.equal(ctl.view().mode,'unsavedCopy');ctl.move(1);ctl.click();assert.equal(pending.key,'project_catalog');complete();assert.equal(ctl.view().mode,'source');
 ctl.move(1);assert.equal(ctl.view().choice,'Set A');ctl.click();assert.equal(ctl.view().mode,'copy');
 assert.equal(ctl.view().detail,'Set A');ctl.click();assert.equal(pending.value,A);assert.equal(pending.target,B);complete();
 assert(ctl.guard());assert(ctl.dirty);assert.equal(status.id,B);ctl.click();complete();assert(!ctl.dirty);
