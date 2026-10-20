@@ -1,4 +1,4 @@
-# Twain 0.2.0 prototype
+# Twain 0.3.0 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -15,13 +15,20 @@ top to bottom. The other six columns are deliberately dark.
   next cycle start and captures its selected length (up to 60 seconds).
   Recording an existing clip replaces it when the queued recording starts.
   A queued inactive-scene recording waits until that scene is launched.
-- Hold Delete and press a clip to clear it immediately, including queued actions.
+- Hold Delete and press a clip once to clear its audio and queued actions,
+  keeping all clip settings. If the clip is already empty, Delete+pad resets
+  its settings (level 100%, effects off, delay rate 1/8). A further delete on a
+  fully default empty clip is a no-op. Both deletion stages are undoable.
 - Hold a clip and turn Volume to adjust that clip's level (0–200%). Release
   the pad without launching/stopping it. Volume alone remains Move's master.
 - Hold a clip and turn knobs 1–7 for its HP filter, LP filter, hard compression,
   saturation, chorus, reverb and tempo-synced eighth-note delay. Zero bypasses
   an effect; amounts are independent per clip and effects can run together.
-  Knob 8 and unheld FX knobs do nothing. Saturation uses RMS output compensation
+  Knob 8 chooses a quantized delay rate; unheld FX knobs do nothing. Hold a
+  clip and touch a knob to see its value; three separate touches no more than
+  450 ms apart reset it. Turning between touches cancels the tap sequence.
+  Volume resets to 100%, effects to 0%, delay rate to 1/8. These touches do
+  not launch or stop the clip. Saturation uses RMS output compensation
   with no makeup boost; it is not a guarantee of equal perceived loudness for
   every signal. Reverb/delay in this prototype are per-clip wet amounts.
 - Hold Loop and press bottom step 1–16 to choose that many bars. Left/right
@@ -39,7 +46,8 @@ bar boundaries. Stop pauses transport; Start/Continue restart at bar 1.
 
 ## Visible controls
 
-Empty A clips are blue; B clips purple. Recording is red, playing green,
+Default empty clips are neutral dim pads. Empty clips retaining customized
+settings are subtly blue in A or purple in B. Recording is red, playing green,
 stopped amber. Queued recording blinks red, queued start green and queued stop
 amber. Only the queued scene pulses. Held clips turn white for volume/FX edits.
 The screen shows clip/effect/value while editing, scene lengths A/B and the
@@ -54,15 +62,38 @@ the clip-volume edit; master volume is never reinjected or doubled. The bridge
 is described in Schwung's official `src/shadow/shadow_ui.c` bindings. Hardware
 verification is still required for Volume ownership and LED reliability.
 
+## Undo and delay rates
+
+The native Undo button reverses the last five edits across both scenes:
+recording/replacing audio, deleting audio, resetting clip settings, parameter
+changes, and scene lengths. A held-pad volume/FX gesture is one undo step,
+even across several knobs. Play/stop/scene launch taps are performance controls
+and don't fill history. A sixth edit drops the oldest. There is no redo yet.
+Undo restores retained audio and control values, not the internal FX tail state;
+if deleting a recording in progress, its partial take restores as stopped audio.
+The button glows when history is available, and the screen shows remaining steps.
+
+Five spare full-capacity audio buffers are reserved at initialization. Destructive
+edits swap buffer ownership into history instead of copying megabytes on render.
+No history allocation or audio file access occurs on the render thread.
+
+Knob 8 rates, shortest-to-longest when turning counterclockwise:
+1/64, 1/32T, 1/32, 1/16T, 1/16, 1/8T, 1/8 (default), 1/4T, 1/4,
+1/2T, 1/2, 1/1. T means triplet: e.g. 1/2T = 1/3 of a bar and
+1/8T = 1/12. The display names every rate. Changes crossfade between fixed
+quantized read taps over 20 ms. The delay buffer holds up to 12 seconds,
+supporting a full bar down to 20 BPM.
+
 ## Current limits
 
 Two scenes, four independent stereo clips each, 60 seconds/clip at 44.1 kHz.
 Initialization fails rather than shortening storage. Buffers allocate at
 creation; the render path performs no allocation or file I/O. FX memory adds
-roughly 7 MB to the approximately 106 MB loop/undo storage budget. Four active
+roughly 35 MB to the approximately 106 MB loop storage budget; five undo
+buffers add another 53 MB. Total audio/FX storage is about 194 MB. Four active
 clips with all seven effects still need CPU and listening checks on Move.
 
-Audio and Twain scene-length/FX settings currently live in memory and are lost
+Audio, undo history and Twain scene-length/FX settings currently live in memory and are lost
 on restart. Inherited Mark session endpoints are not exposed as a Twain save
 workflow; do not rely on them to persist this new clip/FX state. There is no
 crossfade or time stretch. Longer, slower scenes can exceed 60 seconds: a clip

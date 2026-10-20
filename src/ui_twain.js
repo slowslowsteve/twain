@@ -1,11 +1,12 @@
 /* Two vertical clip columns: A at column 1, B at column 2. */
 import { setLED, setButtonLED, decodeDelta } from '/data/UserData/schwung/shared/input_filter.mjs';
-import { MoveKnob1, MoveMaster, MoveRec, MoveDelete, MoveLeft, MoveRight, MoveLoop,
+import { MoveKnob1, MoveMaster, MoveRec, MoveDelete, MoveUndo, MoveLeft, MoveRight, MoveLoop,
     Black, BrightRed, Green, White, LightGrey } from '/data/UserData/schwung/shared/constants.mjs';
 import { announce } from '/data/UserData/schwung/shared/screen_reader.mjs';
 const dspGet=host_module_get_param, dspSet=host_module_set_param;
-const FX=['hp','lp','comp','sat','chorus','reverb','delay'];
-const FX_NAMES=['HP filter','LP filter','Compression','Saturation','Chorus','Reverb','Delay'];
+const FX=['hp','lp','comp','sat','chorus','reverb','delay','delay_rate'];
+const FX_NAMES=['HP filter','LP filter','Compression','Saturation','Chorus','Reverb','Delay','Delay rate'];
+const RATES=['1/1','1/2','1/2T','1/4','1/4T','1/8','1/8T','1/16','1/16T','1/32','1/32T','1/64'];
 let snapshot=null, held=null, rec=false, del=false, loop=false, editScene=0;
 let ticks=0, lastForce=-10000, overlay='', overlayUntil=0;
 function claimVolume(on) {
@@ -16,7 +17,7 @@ function prefix(s) { return s ? 'b_' : 'a_'; }
 function key(clip,name) { return `${prefix(clip.scene)}t${clip.track+1}_${name}`; }
 function clipAt(note) {
     if(note<68 || note>99 || (note-68)%8>1)return null;
-    return {scene:(note-68)%8,track:3-Math.floor((note-68)/8),note,used:false,values:{}};
+    return {scene:(note-68)%8,track:3-Math.floor((note-68)/8),note,used:false,values:{},taps:{},touches:{},editing:false};
 }
 function poll() {
     const raw=dspGet('twain_status');
@@ -33,6 +34,7 @@ function paint() {
     setButtonLED(MoveLoop,loop?124:16,force);
     setButtonLED(MoveRec,rec?BrightRed:65,force);
     setButtonLED(MoveDelete,del?124:16,force);
+    setButtonLED(MoveUndo,snapshot && snapshot.undo>0?124:16,force);
     clear_screen();
     if(!snapshot) { print(2,2,'TWAIN connecting...',1); return; }
     const s=loop?editScene:snapshot.scene, bars=snapshot.bars[s];
@@ -58,7 +60,8 @@ function paint() {
         let color=Black;
         if(col<2) {
             const state=scenes[col][0][row], armed=snapshot.armed[col][row];
-            color=[col?22:33,BrightRed,Green,Green,8][state] || (col?22:33);
+            const custom=snapshot.custom && (snapshot.custom[col] & (1<<row));
+            color=[custom?(col?104:97):119,BrightRed,Green,Green,8][state] || 119;
             if(armed)color=blink?(armed===1||armed===4?BrightRed:armed===3?8:Green):Black;
             else if(snapshot.pending===col && !blink)color=Black;
             if(loop && col===editScene)color=White;
@@ -69,31 +72,77 @@ function paint() {
 }
 function refresh() { poll(); paint(); }
 function notice(text) { overlay=text; overlayUntil=Date.now()+1800; announce(text); }
+function paramFor(controller) { return controller===MoveMaster?'level':FX[controller-MoveKnob1]; }
+function readValue(param,fresh=false) {
+    if(fresh || held.values[param]===undefined) {
+        const raw=dspGet(key(held,param));
+        if(raw===null || raw===undefined || raw==='')return null;
+        const number=Number(raw);if(!Number.isFinite(number))return null;
+        held.values[param]=number;
+    }
+    return held.values[param];
+}
+function showValue(controller,param,value) {
+    const label=param==='level'?'Volume':FX_NAMES[controller-MoveKnob1];
+    const amount=param==='delay_rate'?RATES[value]:`${value}%`;
+    notice(`${held.scene?'B':'A'}${held.track+1} ${label}: ${amount}`);
+}
+function beginEdit() {
+    if(!held.editing) {
+        dspSet('edit_begin',`${prefix(held.scene)}t${held.track+1}`);held.editing=true;
+    }
+}
+function endEdit() {
+    if(held && held.editing) { dspSet('edit_end','1'); held.editing=false; }
+}
+function knobTouch(controller) {
+    if(!held)return;
+    const param=paramFor(controller); if(!param)return;
+    held.used=true;
+    const value=readValue(param,true); if(value===null)return;
+    const now=Date.now(), previous=held.taps[param];
+    const count=previous && now-previous.at<450 ? previous.count+1 : 1;
+    held.taps[param]={at:now,count};
+    if(count===3) {
+        const reset=param==='level'?100:param==='delay_rate'?5:0;
+        if(value!==reset) { beginEdit();dspSet(key(held,param),String(reset));held.values[param]=reset; }
+        held.taps[param]=null;
+        showValue(controller,param,reset);
+    } else showValue(controller,param,value);
+}
 function adjust(controller,value) {
     if(!held)return;
-    const delta=decodeDelta(value);
-    if(!delta)return;
+    const delta=decodeDelta(value); if(!delta)return;
     held.used=true;
-    const param=controller===MoveMaster?'level':FX[controller-MoveKnob1];
-    if(!param)return;
-    const k=key(held,param), max=param==='level'?200:100;
-    if(held.values[param]===undefined) {
-        const raw=dspGet(k);
-        if(raw===null || raw===undefined || raw==='')return;
-        held.values[param]=Number(raw);
-    }
-    const next=Math.max(0,Math.min(max,held.values[param]+delta));
-    held.values[param]=next; dspSet(k,String(next));
-    const label=param==='level'?'Volume':FX_NAMES[controller-MoveKnob1];
-    notice(`${held.scene?'B':'A'}${held.track+1} ${label}: ${next}`);
+    const param=paramFor(controller); if(!param)return;
+    held.taps[param]=null; // an encoder turn isn't a tap in the reset gesture
+    const current=readValue(param); if(current===null)return;
+    const max=param==='level'?200:param==='delay_rate'?RATES.length-1:100;
+    const next=Math.max(0,Math.min(max,current+delta));
+    if(next!==current) { beginEdit();held.values[param]=next;dspSet(key(held,param),String(next)); }
+    showValue(controller,param,next);
 }
 globalThis.init=refresh;
-globalThis.onResume=function() { held=null; claimVolume(false); rec=del=loop=false; lastForce=-10000; refresh(); };
+globalThis.onResume=function() { endEdit(); held=null; claimVolume(false); rec=del=loop=false; lastForce=-10000; refresh(); };
 globalThis.tick=function() { if(++ticks%2===0)poll(); paint(); };
 globalThis.onMidiMessageInternal=function(data) {
     const type=data[0]&0xf0, note=data[1], value=data[2];
+    if((type===0x90 || type===0x80) && note<=8) {
+        const down=type===0x90 && value>=64;
+        if(held) {
+            if(down && !held.touches[note])knobTouch(note===8?MoveMaster:MoveKnob1+note);
+            held.touches[note]=down;
+        }
+        paint();return;
+    }
     if(type===0xb0) {
-        if(note===MoveLoop) { loop=value>0; if(loop)editScene=snapshot?snapshot.scene:0; paint(); return; }
+        if(note===MoveUndo && value>0) {
+            endEdit();
+            if(held) { held.used=true;held.values={};held.taps={}; }
+            const available=snapshot && snapshot.undo>0;
+            dspSet('undo','1');poll();notice(available?`Undo: ${snapshot.undo} left`:'Nothing to undo');paint();return;
+        }
+        if(note===MoveLoop) { if(held)held.used=true;loop=value>0; if(loop)editScene=snapshot?snapshot.scene:0; paint(); return; }
         if(note===MoveRec) { rec=value>0; if(held)held.used=true; paint(); return; }
         if(note===MoveDelete) { del=value>0; if(held)held.used=true; paint(); return; }
         if((note===MoveLeft || note===MoveRight) && value>0) {
@@ -110,28 +159,35 @@ globalThis.onMidiMessageInternal=function(data) {
             }
             paint(); return;
         }
-        if(note>=MoveKnob1 && note<MoveKnob1+7) { adjust(note,value); paint(); return; }
+        if(note>=MoveKnob1 && note<MoveKnob1+8) { adjust(note,value); paint(); return; }
     }
     if(type===0x90 && value>0) {
         if(loop && note>=16 && note<=31) {
             dspSet(prefix(editScene)+'scene_bars',String(note-15)); refresh(); return;
         }
         const clip=clipAt(note); if(!clip)return;
+        if(held && held.note===note)return;
         if(loop) { editScene=clip.scene; paint(); return; }
-        if(held)held.used=true;
+        if(held) { held.used=true;endEdit(); }
         held=clip; claimVolume(true);
         if(del || rec) {
             held.used=true;
+            let audio=false, custom=false;
+            if(snapshot) {
+                const states=(clip.scene?snapshot.b:snapshot.a).split('|')[0].split(',').map(Number);
+                audio=states[clip.track]!==0;
+                custom=!!(snapshot.custom && (snapshot.custom[clip.scene] & (1<<clip.track)));
+            }
             dspSet(key(clip,del?'clear':'record'),'1');
-            notice(del?`${clip.scene?'B':'A'}${clip.track+1} cleared`:`${clip.scene?'B':'A'}${clip.track+1} REC next cycle`);
+            notice(del?`${clip.scene?'B':'A'}${clip.track+1} ${audio?'audio cleared':custom?'settings reset':'empty'}`:`${clip.scene?'B':'A'}${clip.track+1} REC next cycle`);
         }
         refresh(); return;
     }
     if(type===0x80 || (type===0x90 && value===0)) {
         if(held && held.note===note) {
             if(!held.used)dspSet(key(held,'clip'),'1');
-            held=null; claimVolume(false); refresh();
+            endEdit();held=null; claimVolume(false); refresh();
         }
     }
 };
-globalThis.onUnload=function() { claimVolume(false); };
+globalThis.onUnload=function() { endEdit();claimVolume(false); };

@@ -4,11 +4,14 @@
 #define TWAIN_FX_H
 #include <math.h>
 #define TW_FX_COUNT 7
-#define TW_DELAY (MARK_SR * 2)
+#define TW_DELAY (MARK_SR * 12 + 1)
+#define TW_RATE_DEFAULT 5
+#define TW_RATE_COUNT 12
 #define TW_REV 4096
 #define TW_CHORUS 2048
 typedef struct {
-    int value[7], dirty;
+    int value[7], dirty, delay_rate, previous_rate;
+    float rate_mix;
     float amount[7], hp_a, lp_a, hp_z[2], lp_z[2];
     float env, dry_power, sat_power, phase;
     float delay[2][TW_DELAY], chorus[2][TW_CHORUS];
@@ -34,6 +37,15 @@ static float twain_interp(const float *buf, unsigned write, float distance, unsi
     while(p<0) p+=(float)size;
     unsigned a=(unsigned)p % size, b=(a+1)%size;
     return buf[a]+(buf[b]-buf[a])*(p-floorf(p));
+}
+static unsigned twain_delay_frames(float bar_frames, int rate) {
+    static const unsigned denominator[TW_RATE_COUNT]={1,2,3,4,6,8,12,16,24,32,48,64};
+    if(rate<0)rate=0;
+    if(rate>=TW_RATE_COUNT)rate=TW_RATE_COUNT-1;
+    unsigned frames=(unsigned)(bar_frames/denominator[rate]+0.5f);
+    if(frames<1)frames=1;
+    if(frames>=TW_DELAY)frames=TW_DELAY-1;
+    return frames;
 }
 static void twain_fx_run(twain_fx_t *f, float *left, float *right, float bar_frames) {
     float x[2]={*left/32768.0f,*right/32768.0f};
@@ -65,11 +77,15 @@ static void twain_fx_run(twain_fx_t *f, float *left, float *right, float bar_fra
     f->phase+=0.000015f;
     if(f->phase>=1) f->phase-=1;
     static const unsigned lengths[4]={1557,1867,2111,2539};
-    unsigned delay=(unsigned)(bar_frames/8.0f); // eighth-note, stereo ping-pong
-    if(delay<1)delay=1;
-    if(delay>=TW_DELAY)delay=TW_DELAY-1;
-    float echo[2]={f->delay[0][(f->dw+TW_DELAY-delay)%TW_DELAY],
-                   f->delay[1][(f->dw+TW_DELAY-delay)%TW_DELAY]};
+    unsigned delay=twain_delay_frames(bar_frames,f->delay_rate);
+    unsigned old_delay=twain_delay_frames(bar_frames,f->previous_rate);
+    float echo[2];
+    if(f->rate_mix<1)f->rate_mix=fminf(1,f->rate_mix+1.0f/(MARK_SR*0.02f));
+    for(int c=0;c<2;c++) {
+        float old=f->delay[c][(f->dw+TW_DELAY-old_delay)%TW_DELAY];
+        float next=f->delay[c][(f->dw+TW_DELAY-delay)%TW_DELAY];
+        echo[c]=old+(next-old)*f->rate_mix;
+    }
     for(int c=0;c<2;c++) {
         float dist=MARK_SR*(0.016f+0.003f*sinf(6.2831853f*(f->phase+c*0.25f)));
         float chorus=twain_interp(f->chorus[c],f->cw,dist,TW_CHORUS);

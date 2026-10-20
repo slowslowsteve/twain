@@ -137,6 +137,21 @@ double mark_scene_bar_frames(const mark_t *m);
 void mark_scene_cycle(mark_t *m);
 void mark_clip_record(mark_t *m, int track, uint32_t frames);
 
+#ifdef MARK_TWAIN
+/* Audio snapshots transfer buffer ownership, never copy a 60-second clip on
+ * the render thread. The caller supplies a preallocated spare audio buffer. */
+typedef struct {
+    int16_t *audio;
+    uint32_t len, full_len;
+    int state, settings[9]; /* level, seven amounts, delay rate */
+    double pos, grid;
+} mark_clip_snapshot_t;
+int mark_clip_capture(mark_t *, int, mark_clip_snapshot_t *, int audio);
+int mark_clip_restore(mark_t *, int, mark_clip_snapshot_t *, int audio);
+int mark_clip_has_audio(mark_t *, int);
+int mark_clip_custom(mark_t *, int);
+#endif
+
 void mark_on_midi(mark_t *m, const uint8_t *msg, int len, int source);
 void mark_set_param(mark_t *m, const char *key, const char *val);
 int  mark_get_param(mark_t *m, const char *key, char *buf, int buf_len);

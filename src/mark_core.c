@@ -956,6 +956,9 @@ mark_t *mark_create_in_dir(const host_api_v1_t *host, const char *module_dir) {
     for (int i = 0; i < MARK_TRACKS; i++) {
 #ifdef MARK_TWAIN
         m->t[i].clipfx.dirty = 1;
+        m->t[i].clipfx.delay_rate = TW_RATE_DEFAULT;
+        m->t[i].clipfx.previous_rate = TW_RATE_DEFAULT;
+        m->t[i].clipfx.rate_mix = 1;
 #endif
         m->t[i].level = 100;
         m->t[i].pan = 50;
@@ -1514,6 +1517,52 @@ void mark_clip_record(mark_t *m, int ti, uint32_t frames) {
     m->t[ti].rec_target = frames < m->track_frames ? frames : m->track_frames;
     m->t[ti].rec_end = MK_PLAY;
 }
+
+#ifdef MARK_TWAIN
+int mark_clip_has_audio(mark_t *m,int ti) {
+    return m->t[ti].len>0 || m->t[ti].rec_len>0;
+}
+int mark_clip_custom(mark_t *m,int ti) {
+    mk_track_t *t=&m->t[ti];
+    if(t->level!=100 || t->clipfx.delay_rate!=TW_RATE_DEFAULT)return 1;
+    for(int i=0;i<7;i++)if(t->clipfx.value[i])return 1;
+    return 0;
+}
+int mark_clip_capture(mark_t *m,int ti,mark_clip_snapshot_t *s,int audio) {
+    if(m->io_busy || m->swap_track>=0)return 0;
+    mk_track_t *t=&m->t[ti];
+    s->settings[0]=t->level;
+    for(int i=0;i<7;i++)s->settings[i+1]=t->clipfx.value[i];
+    s->settings[8]=t->clipfx.delay_rate;
+    s->len=t->st==MK_REC ? t->rec_len : t->len;
+    s->full_len=t->st==MK_REC ? t->rec_len : t->full_len;
+    s->state=t->st==MK_REC ? (s->len?MK_STOP:MK_EMPTY) : t->st;
+    s->pos=t->pos; s->grid=m->grid_unit;
+    if(audio) {
+        int16_t *spare=s->audio; s->audio=t->buf; t->buf=spare;
+        track_clear(m,ti);
+    }
+    return 1;
+}
+int mark_clip_restore(mark_t *m,int ti,mark_clip_snapshot_t *s,int audio) {
+    if(m->io_busy || m->swap_track>=0)return 0;
+    mk_track_t *t=&m->t[ti];
+    if(audio) {
+        track_clear(m,ti);
+        int16_t *discard=t->buf; t->buf=s->audio; s->audio=discard;
+        t->len=s->len; t->full_len=s->full_len;
+        t->st=s->state;
+        t->pos=s->len ? fmod(s->pos,s->len) : 0;
+        if(m->grid_unit<=0)m->grid_unit=s->grid;
+    }
+    t->level=s->settings[0];
+    for(int i=0;i<7;i++)t->clipfx.value[i]=s->settings[i+1];
+    if(t->clipfx.delay_rate!=s->settings[8]) { t->clipfx.previous_rate=t->clipfx.delay_rate; t->clipfx.rate_mix=0; }
+    t->clipfx.delay_rate=s->settings[8]; t->clipfx.dirty=1;
+    m->edit_rev++;
+    return 1;
+}
+#endif
 
 static void all_button(mark_t *m) {
     if (m->io_busy) return;
@@ -2396,6 +2445,11 @@ void mark_set_param(mark_t *m, const char *key, const char *val) {
         const char *k = key + 3;
         mk_track_t *t = &m->t[ti];
 #ifdef MARK_TWAIN
+        if(!strcmp(k,"delay_rate")) {
+            int rate=clampi(atoi(val),0,TW_RATE_COUNT-1);
+            if(rate!=t->clipfx.delay_rate) { t->clipfx.previous_rate=t->clipfx.delay_rate; t->clipfx.rate_mix=0; }
+            t->clipfx.delay_rate=rate; m->edit_rev++; return;
+        }
         int fx_index=twain_fx_index(k);
         if(fx_index>=0) { t->clipfx.value[fx_index]=clampi(atoi(val),0,100); t->clipfx.dirty=1; m->edit_rev++; return; }
 #endif
@@ -2606,6 +2660,7 @@ int mark_get_param(mark_t *m, const char *key, char *buf, int buf_len) {
         const char *k = key + 3;
         const mk_track_t *t = &m->t[ti];
 #ifdef MARK_TWAIN
+        if(!strcmp(k,"delay_rate"))return snprintf(buf,(size_t)buf_len,"%d",t->clipfx.delay_rate);
         int fx_index=twain_fx_index(k);
         if(fx_index>=0)return snprintf(buf,(size_t)buf_len,"%d",t->clipfx.value[fx_index]);
 #endif

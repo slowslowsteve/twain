@@ -5,10 +5,10 @@ let now=0,reads=0,failed=false;
 const claims=[];
 const writes=[],leds=new Map(),buttons=new Map(),text=[];
 const params=new Map();
-const state={scene:0,pending:-1,bars:[1,4],phase:0,stopped:0,
+const state={scene:0,pending:-1,bars:[1,4],phase:0,stopped:0,custom:[0,0],undo:0,
  a:'0,1,2,4|0,0,0,0|0,0,0,0|0|0',b:'4,0,2,0|0,0,0,0|0,0,0,0|0|0',armed:[[0,0,0,0],[0,0,0,0]]};
 const constants={MoveKnob1:71,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,
- MoveLoop:58,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
+ MoveLoop:58,MoveUndo:56,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
 class FakeDate extends Date {static now(){return now;}}
 const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_master_volume:v=>claims.push(v),
  host_module_set_param(k,v){writes.push([k,v]);params.set(k,v);if(k==='scene')state.pending=Number(v)===state.scene?-1:Number(v);if(k.endsWith('scene_bars'))state.bars[k[0]==='b'?1:0]=Number(v);},
@@ -26,7 +26,7 @@ const cc=(n,v=127)=>context.onMidiMessageInternal([0xb0,n,v]);
 const down=n=>context.onMidiMessageInternal([0x90,n,127]);
 const up=n=>context.onMidiMessageInternal([0x80,n,0]);
 context.init();
-assert.equal(leds.get(92),33);assert.equal(leds.get(85),22); // A1/B2 columns
+assert.equal(leds.get(92),119);assert.equal(leds.get(85),119); // A1/B2 columns
 assert.equal(leds.get(94),0);assert.equal(leds.get(99),0); // unused pads dark
 assert.equal(buttons.get(58),16);
 down(92);assert.equal(writes.length,0);up(92);assert.deepEqual(writes.at(-1),['a_t1_clip','1']);
@@ -36,10 +36,10 @@ cc(58);assert.equal(buttons.get(58),124);down(19);up(19);assert.deepEqual(writes
 cc(63);down(31);up(31);assert.deepEqual(writes.at(-1),['b_scene_bars','16']);
 cc(58,0);assert.equal(buttons.get(58),16);assert(text.includes('A Bar 1/4'));
 const before=writes.length;cc(71,5);assert.equal(writes.length,before); // no clip, no arbitrary scene/FX changes
-params.set('a_t1_level','100');down(92);cc(79,5);up(92);assert.deepEqual(writes.at(-1),['a_t1_level','105']);
+params.set('a_t1_level','100');down(92);cc(79,5);up(92);assert(writes.some(([k,v])=>k==='a_t1_level'&&v==='105'));assert.deepEqual(writes.at(-1),['edit_end','1']);
 assert(!writes.slice(before).some(([k])=>k==='scene'||k.endsWith('_clip')));
 const fx=['hp','lp','comp','sat','chorus','reverb','delay'];
-for(let i=0;i<7;i++){down(93);cc(71+i,7);up(93);assert.deepEqual(writes.at(-1),[`b_t1_${fx[i]}`,'7']);}
+for(let i=0;i<7;i++){down(93);cc(71+i,7);up(93);assert(writes.some(([k,v])=>k===`b_t1_${fx[i]}`&&v==='7'));}
 const beforeMaster=writes.length;cc(79,2);assert.equal(writes.length,beforeMaster);
 assert(claims.includes(1));assert.equal(claims.at(-1),0);
 cc(63);assert.equal(state.pending,1);cc(63);assert.equal(state.pending,1);cc(62);assert.equal(state.pending,-1);
@@ -53,3 +53,44 @@ down(84);up(84);assert.deepEqual(writes.at(-1),['a_t2_clip','1']);
 // A later native LED repaint must be repaired periodically, not only at resume.
 leds.set(84,0);now+=1200;context.tick();assert.notEqual(leds.get(84),0);
 console.log('Twain UI: clip gestures, seven FX, hold Loop, volume, consistent scenes and LED repair passed');
+
+state.custom=[1,0];state.armed=[[0,0,0,0],[0,0,0,0]];context.onResume();
+assert.equal(leds.get(92),97); // subtly tinted empty clip with settings
+assert.equal(leds.get(85),119);
+state.undo=5;context.onResume();assert.equal(buttons.get(56),124);
+cc(56);assert.deepEqual(writes.at(-1),['undo','1']);
+// Touch shows a value; triple touch resets it. Releases aren't additional taps.
+params.set('a_t1_lp','73');down(92);
+const changes=writes.length;
+context.onMidiMessageInternal([0x90,1,127]);context.onMidiMessageInternal([0x80,1,0]);
+assert.equal(writes.length,changes);assert(text.includes('A1 LP filter: 73%'));
+now+=100;context.onMidiMessageInternal([0x90,1,127]);context.onMidiMessageInternal([0x80,1,0]);
+assert.equal(writes.length,changes);
+now+=100;context.onMidiMessageInternal([0x90,1,127]);
+assert.deepEqual(writes.at(-1),['a_t1_lp','0']);up(92);
+assert.deepEqual(writes.at(-1),['edit_end','1']);
+assert(!writes.slice(changes).some(([k])=>k==='a_t1_clip'));
+// Spaced touches / a turn between touches must not accidentally reset.
+params.set('a_t1_hp','40');down(92);
+context.onMidiMessageInternal([0x90,0,127]);context.onMidiMessageInternal([0x80,0,0]);now+=1000;
+context.onMidiMessageInternal([0x90,0,127]);context.onMidiMessageInternal([0x80,0,0]);cc(71,1);now+=100;
+context.onMidiMessageInternal([0x90,0,127]);up(92);
+assert.equal(params.get('a_t1_hp'),'41');
+params.set('b_t1_delay_rate','5');down(93);cc(78,1);up(93);
+assert.equal(params.get('b_t1_delay_rate'),'6');assert(text.includes('B1 Delay rate: 1/8T'));
+// Triple touch knob 8 returns to the default eighth note, not rate index zero.
+down(93);for(let i=0;i<3;i++){now+=100;context.onMidiMessageInternal([0x90,7,127]);context.onMidiMessageInternal([0x80,7,0]);}up(93);
+assert.equal(params.get('b_t1_delay_rate'),'5');
+console.log('Twain UI: undo, empty-settings tint, touch readout, triple reset and triplet rate passed');
+
+// Duplicate touch packets while a finger is still resting aren't three taps.
+params.set('a_t1_comp','55');down(92);
+for(let i=0;i<3;i++)context.onMidiMessageInternal([0x90,2,127]);
+up(92);assert.equal(params.get('a_t1_comp'),'55');
+
+params.set('a_t1_level','125');down(92);
+for(let i=0;i<3;i++){now+=100;context.onMidiMessageInternal([0x90,8,127]);context.onMidiMessageInternal([0x80,8,0]);}
+up(92);assert.equal(params.get('a_t1_level'),'100');
+// A duplicate pad note-on must not perform both delete stages in one press.
+cc(119);down(92);const deletes=writes.filter(([k])=>k==='a_t1_clear').length;
+down(92);assert.equal(writes.filter(([k])=>k==='a_t1_clear').length,deletes);up(92);cc(119,0);
