@@ -1,4 +1,4 @@
-# Twain 0.6.2 prototype
+# Twain 0.7.0 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -21,6 +21,18 @@ of stereo capacity at 44.1 kHz.
 - Hold Record and press clips to queue replacement recording at their scene's
   next cycle start. Captures use that scene's length, up to 60 seconds. A queued
   inactive-scene recording waits until its scene is launched.
+- From stop, arm clips with Record+pad, then press Play. Twain waits one bar
+  with a visible 4–3–2–1 and four short clicks before capturing a full take.
+  Monitoring remains available. Count-in clicks are not mixed into recordings.
+  This is Twain’s fixed count-in; Move’s project count-in setting is not read.
+  Starting ordinary playback without armed recordings has no extra count-in.
+  Native tracks follow Move’s own transport and are not held for Twain’s count-in.
+- While playing, Shift+Play queues a jump to the start of the last scene bar at
+  the next bar boundary. Existing clips seek to that position and keep playing.
+  The remaining final bar leads into any recording armed for the next cycle;
+  takes still last the full scene length. Another press cancels a queued jump.
+  One-bar scenes/already-last-bar requests do nothing. Active takes block jumps.
+  This shortcut changes only Twain’s playheads, not native track positions.
 - Hold Delete and press a clip to clear audio while keeping its settings.
   If already empty, Delete+pad resets volume, FX, delay rate and mute. Another
   delete on a default empty clip does nothing. Both stages are undoable.
@@ -65,8 +77,11 @@ the bar/beat and select length while Loop is held.
 
 Empty pads are dim neutral; empty clips with retained settings have a subtle
 scene tint. Recording is red, playing green, stopped amber, and muted clips
-are light grey. Queued actions blink; the queued scene pulses. Held pads turn
+are pale purple, including when selected. Queued actions blink; the queued scene pulses. Held pads turn
 white; the selected clip stays white and its state appears on screen. Loop, Record, Delete, Undo and Mute indicate their availability/state.
+Ordinary Play is forwarded once through the installed host’s
+`move_midi_inject_to_move` binding; the manifest no longer passes Play through
+directly, so Shift+Play cannot also stop Move. Twain drives its Play LED.
 A periodic LED refresh repairs native feedback overwrites. Parked Twain skips
 screen work and releases stale held-pad/volume gestures.
 
@@ -112,7 +127,9 @@ crossfade over 20 ms. The delay buffer supports a full bar down to 20 BPM.
 Undo reverses five edits across all four scenes: audio replacement/deletion,
 settings reset, volume/FX edits, mutes, master controls and scene lengths.
 A held-pad editing gesture is one step; unheld knob edits group until 600 ms idle; Shift-held master-volume turns are
-one step too. Playback/scene requests do not fill history. There is no redo.
+one step too. Playback/scene/jump requests do not fill history. Shift+Undo redoes up to five
+undone edits. A new edit clears the redo branch. Undo and redo exchange the
+same five spare buffers; redo does not reserve more audio memory.
 Undo restores audio and control values, not FX tail memory. Five preallocated
 60-second spare buffers swap ownership instead of copying audio on render.
 
@@ -149,7 +166,7 @@ Set 23, a new Set 24 and its copy, not the execution of the in-module gate.
   dialog is not applied to a newly opened project.
 - All four scenes, 32 clips' raw stereo audio, seven FX amounts, delay rates,
   clip volume/mute, scene lengths, selected scene and master volume/mute save
-  together. Playback reloads stopped at bar 1; FX tails and undo history are
+  together. Playback reloads stopped at bar 1; FX tails, undo/redo history and transport/count-in state are
   not saved. Press native Play and launch clips to continue.
 - Save waits for completed recordings: if a take is still armed/recording,
   the screen asks to finish it first and offers Retry save. During file work,

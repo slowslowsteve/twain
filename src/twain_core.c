@@ -21,10 +21,11 @@ struct twain {
     mark_t *scene[TW_SCENES]; int active; int pending; int bars[TW_SCENES]; double phase;
     int clock_running, clock_ticks, cycle_due, transport_stopped, bar_due;
     int armed[TW_SCENES][MARK_TRACKS];
+    int count_in, advance_last, click_left; float click_phase;
     int master_level, master_mute, master_editing, master_saved; float master_gain;
     int input_monitor, monitor_safe, input_clip; float input_peak, warm_z[2];
     twain_edit_t history[TW_HISTORY];
-    int history_head, history_count;
+    int history_head, history_count, redo_count;
     int gesture_scene, gesture_clip, gesture_saved;
 };
 twain_t *twain_create(const host_api_v1_t *host, const char *dir) {
@@ -60,7 +61,7 @@ void twain_destroy(twain_t *t) {
 static int remember(twain_t *t,int scene,int clip,int kind) {
     twain_edit_t *edit=&t->history[t->history_head];
     if(kind<2 && !mark_clip_capture(t->scene[scene],clip,&edit->saved,kind==1))return 0;
-    t->io.revision++;
+    t->io.revision++;t->redo_count=0;
     edit->scene=scene; edit->clip=clip; edit->kind=kind; edit->bars=kind==3?t->master_level:kind==4?t->master_mute:t->bars[scene];
     t->history_head=(t->history_head+1)%TW_HISTORY;
     if(t->history_count<TW_HISTORY)t->history_count++;
@@ -73,20 +74,25 @@ static int remember_settings(twain_t *t,int scene,int clip) {
     if(grouped)t->gesture_saved=1;
     return 1;
 }
-static void undo_edit(twain_t *t) {
-    if(!t->history_count)return;
-    int index=(t->history_head+TW_HISTORY-1)%TW_HISTORY;
+static void history_edit(twain_t *t,int redo) {
+    if(!(redo?t->redo_count:t->history_count))return;
+    int index=redo?t->history_head:(t->history_head+TW_HISTORY-1)%TW_HISTORY;
     twain_edit_t *edit=&t->history[index];
-    if(edit->kind==2)t->bars[edit->scene]=edit->bars;
-    else if(edit->kind==3)t->master_level=edit->bars;
-    else if(edit->kind==4)t->master_mute=edit->bars;
-    else {
+    if(edit->kind>=2) {
+        int *value=edit->kind==2?&t->bars[edit->scene]:edit->kind==3?&t->master_level:&t->master_mute;
+        int current=*value;*value=edit->bars;edit->bars=current;
+    } else {
+        // Exchange current and saved ownership using the same five spare buffers.
+        mark_clip_snapshot_t current={.audio=edit->saved.audio};
+        if(!mark_clip_capture(t->scene[edit->scene],edit->clip,&current,edit->kind==1))return;
         if(!mark_clip_restore(t->scene[edit->scene],edit->clip,&edit->saved,edit->kind==1))return;
+        edit->saved=current;
         if(edit->kind==1)t->armed[edit->scene][edit->clip]=0;
     }
     t->io.revision++;
-    t->history_head=index; t->history_count--;
-    t->gesture_scene=t->gesture_clip=-1; t->gesture_saved=0;
+    if(redo) { t->history_head=(index+1)%TW_HISTORY;t->history_count++;t->redo_count--; }
+    else { t->history_head=index;t->history_count--;t->redo_count++; }
+    t->gesture_scene=t->gesture_clip=-1;t->gesture_saved=0;
     t->master_editing=t->master_saved=0;
 }
 static void launch_armed(twain_t *t, int scene_start) {
@@ -116,6 +122,7 @@ static void launch_armed(twain_t *t, int scene_start) {
     mark_set_param(t->scene[scene], "quantize", quantize);
 }
 static void cycle(twain_t *t) {
+    t->advance_last=0;
     mark_scene_cycle(t->scene[t->active]);
     if (t->pending >= 0) {
         t->io.revision++;
@@ -128,6 +135,16 @@ static void cycle(twain_t *t) {
     t->cycle_due = 0;
     t->bar_due = 0;
     launch_armed(t, 1);
+}
+static void bar_boundary(twain_t *t) {
+    if(t->advance_last) {
+        t->advance_last=0;
+        if(mark_scene_seek(t->scene[t->active],mark_scene_bar_frames(t->scene[t->active])*(t->bars[t->active]-1))) {
+            t->phase=t->bars[t->active]-1;t->clock_ticks=(t->bars[t->active]-1)*96;
+        }
+    }
+    launch_armed(t,t->clock_ticks==0 && t->phase<0.5);
+    t->bar_due=0;
 }
 void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
     tw_io_poll(t);
@@ -148,9 +165,10 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
     if(t->io.identity_enabled && (!t->io.live[0] || strcmp(t->io.live,t->io.loaded))) {
         memset(out,0,(size_t)n*2*sizeof(*out));return;
     }
+    if(t->count_in) { memset(out,0,(size_t)n*2*sizeof(*out));goto master_mix; }
     if(t->transport_stopped) { memset(out,0,(size_t)n*2*sizeof(*out));goto master_mix; }
     if (t->cycle_due) cycle(t);
-    else if (t->bar_due) { launch_armed(t, t->clock_ticks==0); t->bar_due = 0; }
+    else if (t->bar_due) bar_boundary(t);
     int done = 0;
     while (done < n) {
         double bar = mark_scene_bar_frames(t->scene[t->active]);
@@ -169,15 +187,20 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
         if (!t->clock_running) {
             t->phase += count / bar;
             if (t->phase + 1e-9 >= t->bars[t->active]) cycle(t);
-            else if (t->phase + 1e-9 >= next_bar) launch_armed(t, 0);
+            else if (t->phase + 1e-9 >= next_bar) bar_boundary(t);
         }
     }
 master_mix:;
     float target=t->master_mute?0:t->master_level/100.0f;
     for(int i=0;i<n;i++) {
         t->master_gain+=(target-t->master_gain)*0.002f;
+        float click=0;
+        if(t->click_left>0) {
+            click=sinf(t->click_phase)*1800.0f*(t->click_left/(MARK_SR*0.008f));
+            t->click_phase+=6.2831853f*1200/MARK_SR;t->click_left--;
+        }
         for(int c=0;c<2;c++) {
-            float value=(out[i*2+c]+(t->input_monitor && t->monitor_safe?warm[i*2+c]:0))*t->master_gain;
+            float value=(click+out[i*2+c]+(t->input_monitor && t->monitor_safe?warm[i*2+c]:0))*t->master_gain;
             out[i*2+c]=(int16_t)fmaxf(-32768,fminf(32767,value));
         }
     }
@@ -206,8 +229,16 @@ void twain_set_param(twain_t *t, const char *key, const char *val) {
     }
     if(!strcmp(key,"master_edit_begin")) { t->master_editing=1;t->master_saved=0;return; }
     if(!strcmp(key,"master_edit_end")) { t->master_editing=t->master_saved=0;return; }
-    if(!strcmp(key,"undo")) {
-        if(!strcmp(val,"1") || !strcmp(val,"trigger"))undo_edit(t);
+    if(!strcmp(key,"advance_last")) {
+        double phase=t->clock_running?t->clock_ticks/96.0:t->phase;
+        if((!strcmp(val,"1") || !strcmp(val,"trigger")) && !t->transport_stopped && !t->count_in && phase<t->bars[t->active]-1) {
+            char states[64];mark_get_param(t->scene[t->active],"tstates",states,sizeof states);
+            if(!strchr(states,'1') && !strchr(states,'3'))t->advance_last=!t->advance_last;
+        }
+        return;
+    }
+    if(!strcmp(key,"undo") || !strcmp(key,"redo")) {
+        if(!strcmp(val,"1") || !strcmp(val,"trigger"))history_edit(t,!strcmp(key,"redo"));
         return;
     }
     if(!strcmp(key,"edit_end")) {
@@ -322,18 +353,19 @@ int twain_get_param(twain_t *t, const char *key, char *buf, int n) {
         }
         double phase=t->clock_running?t->clock_ticks/96.0:t->phase;
         return snprintf(buf,n,
-            "{\"scene\":%d,\"pending\":%d,\"bars\":[%d,%d,%d,%d],\"phase\":%.4f,\"stopped\":%d,"
-            "\"custom\":[%d,%d,%d,%d],\"muted\":[%d,%d,%d,%d],\"master\":%d,\"master_mute\":%d,\"undo\":%d,"
+            "{\"scene\":%d,\"pending\":%d,\"bars\":[%d,%d,%d,%d],\"phase\":%.4f,\"stopped\":%d,\"count_in\":%d,\"advance\":%d,"
+            "\"custom\":[%d,%d,%d,%d],\"muted\":[%d,%d,%d,%d],\"master\":%d,\"master_mute\":%d,\"undo\":%d,\"redo\":%d,"
             "\"a\":\"%s\",\"b\":\"%s\",\"c\":\"%s\",\"d\":\"%s\","
             "\"armed\":%s,\"input\":%.4f,\"clip\":%d,\"monitor\":%d,\"monitor_wanted\":%d,\"monitor_blocked\":%d}",
-            t->active,t->pending,t->bars[0],t->bars[1],t->bars[2],t->bars[3],phase,t->transport_stopped,
+            t->active,t->pending,t->bars[0],t->bars[1],t->bars[2],t->bars[3],phase,t->transport_stopped,t->count_in?4-t->clock_ticks/24:0,t->advance_last,
             custom[0],custom[1],custom[2],custom[3],muted[0],muted[1],muted[2],muted[3],
-            t->master_level,t->master_mute,t->history_count,state[0],state[1],state[2],state[3],armed,
+            t->master_level,t->master_mute,t->history_count,t->redo_count,state[0],state[1],state[2],state[3],armed,
             t->input_peak,t->input_clip>0,t->input_monitor&&t->monitor_safe,t->input_monitor,t->input_monitor&&!t->monitor_safe);
     }
     if(!strcmp(key,"input_monitor"))return snprintf(buf,n,"%d",t->input_monitor);
     if(!strcmp(key,"master_level"))return snprintf(buf,n,"%d",t->master_level);
     if(!strcmp(key,"master_mute"))return snprintf(buf,n,"%d",t->master_mute);
+    if(!strcmp(key,"redo_count"))return snprintf(buf,n,"%d",t->redo_count);
     if(!strcmp(key,"undo_count"))return snprintf(buf,n,"%d",t->history_count);
     if (!strcmp(key, "module_id")) return snprintf(buf, n, "twain");
     if (!strcmp(key, "scene")) return snprintf(buf, n, "%d", t->active);
@@ -353,6 +385,10 @@ void twain_on_midi(twain_t *t, const uint8_t *msg, int n, int source) {
     tw_io_poll(t);
     if (n > 0) {
         if (msg[0] == 0xfa || msg[0] == 0xfb) {
+            int from_stop=t->transport_stopped || !t->clock_running;
+            t->count_in=0;t->advance_last=0;
+            if(from_stop)for(int i=0;i<MARK_TRACKS;i++)if(t->armed[t->active][i]==4)t->count_in=1;
+            t->click_left=t->count_in?(int)(MARK_SR*0.008):0;t->click_phase=0;
             t->clock_running = 1;
             t->transport_stopped = 0;
             t->clock_ticks = 0;
@@ -360,13 +396,17 @@ void twain_on_midi(twain_t *t, const uint8_t *msg, int n, int source) {
             /* Transport restart starts the current scene from bar 1. */
             mark_scene_cycle(t->scene[t->active]);
             t->cycle_due = 0;
-            t->bar_due = 1;
+            t->bar_due = !t->count_in;
         } else if (msg[0] == 0xfc) {
             t->phase = (double)t->clock_ticks / 96.0;
             t->clock_running = 0;
-            t->transport_stopped = 1;
+            t->transport_stopped = 1;t->count_in=t->advance_last=t->click_left=0;
         } else if (msg[0] == 0xf8 && t->clock_running) {
-            if (++t->clock_ticks >= t->bars[t->active] * 96) t->cycle_due = 1;
+            if(t->count_in) {
+                if(++t->clock_ticks>=96) {
+                    t->count_in=0;t->clock_ticks=0;t->phase=0;t->bar_due=1;
+                } else if(t->clock_ticks%24==0) { t->click_left=(int)(MARK_SR*0.008);t->click_phase=0; }
+            } else if (++t->clock_ticks >= t->bars[t->active] * 96) t->cycle_due = 1;
             else if (t->clock_ticks % 96 == 0) t->bar_due = 1;
         }
     }

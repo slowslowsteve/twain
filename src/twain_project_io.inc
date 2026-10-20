@@ -198,8 +198,8 @@ static void tw_io_poll(twain_t *t) {
             for(int i=0;i<4;i++) { mark_t *old=t->scene[i];t->scene[i]=io->staged[i];io->staged[i]=old;t->bars[i]=io->bars[i]; }
             t->active=io->active;t->master_level=io->master;t->master_mute=io->mute;t->master_gain=0;
             t->pending=-1;t->phase=0;t->clock_running=t->clock_ticks=t->cycle_due=t->bar_due=0;
-            t->transport_stopped=1;t->input_monitor=0;memset(t->armed,0,sizeof t->armed);
-            t->history_head=t->history_count=0;t->gesture_scene=t->gesture_clip=-1;t->gesture_saved=0;
+            t->transport_stopped=1;t->input_monitor=0;t->count_in=t->advance_last=t->click_left=0;memset(t->armed,0,sizeof t->armed);
+            t->history_head=t->history_count=t->redo_count=0;t->gesture_scene=t->gesture_clip=-1;t->gesture_saved=0;
             t->master_editing=t->master_saved=0;
             memcpy(io->loaded,io->target,37);tw_name(io->name,io->live_name);
             io->revision++;io->saved_revision=io->revision;

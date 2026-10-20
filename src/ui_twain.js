@@ -1,6 +1,6 @@
 /* Four vertical clip columns: scenes A–D, eight layers each, in two banks of four. */
 import { setLED, setButtonLED, decodeDelta } from '/data/UserData/schwung/shared/input_filter.mjs';
-import { MoveKnob1, MoveMaster, MoveRec, MoveDelete, MoveUndo, MoveLeft, MoveRight, MoveLoop, MoveShift, MoveMute, MoveMainKnob, MoveMainButton, MoveUp, MoveDown,
+import { MoveKnob1, MoveMaster, MoveRec, MoveDelete, MoveUndo, MoveLeft, MoveRight, MoveLoop, MoveShift, MoveMute, MoveMainKnob, MoveMainButton, MoveUp, MoveDown, MovePlay,
     Black, BrightRed, Green, White, LightGrey } from '/data/UserData/schwung/shared/constants.mjs';
 import { createProjectController } from './twain_projects.mjs';
 import { announce } from '/data/UserData/schwung/shared/screen_reader.mjs';
@@ -14,7 +14,7 @@ const RATES=['1/1','1/2','1/2T','1/4','1/4T','1/8','1/8T','1/16','1/16T','1/32',
 let bank=0, selected=null, editingClip=null, lastEditAt=0, lastProject=null, lastSafety=-1, lastSafetyAt=-10000;
 let snapshot=null, held=null, rec=false, del=false, loop=false, editScene=0;
 let pressed=new Map(), shift=false, mute=false, muteUsed=false;
-let masterEditing=false;
+let masterEditing=false, playRoute=null;
 let ticks=0, lastForce=-10000, overlay='', overlayUntil=0;
 function claimVolume(on) {
     if(typeof shadow_set_overtake_suppress_master_volume==='function')
@@ -22,6 +22,11 @@ function claimVolume(on) {
 }
 function label(s) { return 'ABCD'[s]; }
 function prefix(s) { return 'abcd'[s]+'_'; }
+function nativePlay(value) {
+    if(typeof move_midi_inject_to_move==='function')return move_midi_inject_to_move([0x0b,0xb0,MovePlay,value]);
+    notice('Host: Play unavailable');return false;
+}
+function releasePlay() { if(playRoute==='native')nativePlay(0);playRoute=null; }
 function volumeClaim() { claimVolume(shift || pressed.size>0); }
 function key(clip,name) { return `${prefix(clip.scene)}t${clip.track+1}_${name}`; }
 function clipAt(note) {
@@ -56,12 +61,13 @@ function paint() {
     const now=Date.now(), blink=Math.floor(now/250)%2===0;
     const force=now-lastForce>=1000;
     if(force)lastForce=now;
+    setButtonLED(MovePlay,snapshot && !snapshot.stopped?Green:16,force);
     setButtonLED(MoveLoop,loop?124:16,force);
     setButtonLED(MoveRec,rec?BrightRed:shift?(snapshot && snapshot.monitor?Green:16):65,force);
     setButtonLED(MoveUp,bank===1?124:16,force);setButtonLED(MoveDown,bank===0?124:16,force);
     setButtonLED(MoveDelete,del?124:16,force);
     setButtonLED(MoveMute,snapshot && snapshot.master_mute?124:mute?White:16,force);
-    setButtonLED(MoveUndo,snapshot && snapshot.undo>0?124:16,force);
+    setButtonLED(MoveUndo,snapshot && (shift?snapshot.redo:snapshot.undo)>0?124:16,force);
     clear_screen();
     if(!snapshot) { print(2,2,'TWAIN connecting...',1); return; }
     if(projects.modal) {
@@ -78,7 +84,9 @@ function paint() {
     const bar=Math.floor(phase)+1, beat=Math.floor((phase%1)*4)+1;
     print(2,2,loop?`Set ${label(s)}: ${bars} bars`:`${label(snapshot.scene)} Bar ${bar}/${snapshot.bars[snapshot.scene]}`,1);
     print(2,14,`${projects.name.slice(0,13)} ${bank?'5-8':'1-4'}`,1);
-    if(now<overlayUntil) print(2,28,overlay,1);
+    if(snapshot.count_in)print(2,28,`Count-in: ${snapshot.count_in}`,1);
+    else if(snapshot.advance)print(2,28,'Last bar next',1);
+    else if(now<overlayUntil) print(2,28,overlay,1);
     else if(snapshot.stopped) print(2,28,'Stopped',1);
     else if(snapshot.pending>=0) print(2,28,`Next ${label(snapshot.pending)} at end`,1);
     else {
@@ -108,9 +116,9 @@ function paint() {
         if(progress>0)fill_rect(x+1,56,Math.round((w-2)*progress),5,1);
     }
     for(let i=0;i<16;i++) {
-        const current=snapshot.bars[snapshot.scene]===1?Math.floor((phase%1)*16):bar-1;
+        const current=(snapshot.count_in || snapshot.bars[snapshot.scene]===1)?Math.floor((phase%1)*16):bar-1;
         const color=loop?(i===bars-1?White:i<bars?16:LightGrey)
-            :i===current?White:i<snapshot.bars[snapshot.scene] || snapshot.bars[snapshot.scene]===1?33:Black;
+            :i===current?White:i<snapshot.bars[snapshot.scene] || snapshot.count_in || snapshot.bars[snapshot.scene]===1?33:Black;
         setLED(16+i,color,force);
     }
     const scenes=[snapshot.a,snapshot.b,snapshot.c,snapshot.d].map(v=>v.split('|').map(p=>p.split(',').map(Number)));
@@ -121,8 +129,8 @@ function paint() {
             const state=scenes[col][0][layer], armed=snapshot.armed[col][layer];
             const custom=snapshot.custom && (snapshot.custom[col] & (1<<layer));
             color=[custom?[97,104,16,33][col]:119,BrightRed,Green,Green,8][state] || 119;
-            if(snapshot.muted && (snapshot.muted[col] & (1<<layer)))color=LightGrey;
-            if(selected && selected.scene===col && selected.track===layer && state!==1)color=White;
+            if(snapshot.muted && (snapshot.muted[col] & (1<<layer)))color=51;
+            if(selected && selected.scene===col && selected.track===layer && state!==1 && !(snapshot.muted && (snapshot.muted[col] & (1<<layer))))color=White;
             if(armed)color=blink?(armed===1||armed===4?BrightRed:armed===3?8:Green):Black;
             else if(snapshot.pending===col && !blink)color=Black;
             if(loop && col===editScene)color=White;
@@ -200,7 +208,7 @@ function muteClip(clip) {
     notice(`${label(clip.scene)}${clip.track+1} ${next==='1'?'muted':'unmuted'}`);
 }
 globalThis.init=function(){monitorSafety();projects.tick(true);refresh();};
-globalThis.onResume=function() { monitorSafety(true);endEdit();endMasterEdit(); pressed.clear();held=null;shift=mute=muteUsed=false; claimVolume(false); rec=del=loop=false; lastForce=-10000;projects.tick(true); refresh(); };
+globalThis.onResume=function() { releasePlay(); monitorSafety(true);endEdit();endMasterEdit(); pressed.clear();held=null;shift=mute=muteUsed=false; claimVolume(false); rec=del=loop=false; lastForce=-10000;projects.tick(true); refresh(); };
 globalThis.tick=function() {
     monitorSafety();
     if(editingClip && !held && Date.now()-lastEditAt>600)endEdit();
@@ -214,6 +222,19 @@ globalThis.tick=function() {
 globalThis.onMidiMessageInternal=function(data) {
     const type=data[0]&0xf0, note=data[1], value=data[2];
     if(type!==0x90 && type!==0x80 && type!==0xb0)return;
+    if(type===0xb0 && note===MovePlay) {
+        if(value>0 && playRoute===null) {
+            playRoute=shift?'advance':'native';
+            if(playRoute==='native')nativePlay(value);
+            else if(projects.guard()) {
+                const wasQueued=snapshot && snapshot.advance;
+                dspCritical('advance_last','1',100);poll();
+                const recording=snapshot && snapshot['abcd'[snapshot.scene]].split('|')[0].split(',').some(v=>v==='1'||v==='3');
+                notice(snapshot && snapshot.advance?'Last bar next':snapshot && snapshot.stopped?'Start Play first':snapshot && snapshot.count_in?'Count-in running':recording?'Finish take first':wasQueued?'Jump cancelled':'Already last bar');
+            }
+        } else if(value===0)releasePlay();
+        paint();return;
+    }
     if(type===0xb0 && note===MoveMainKnob) { projects.move(decodeDelta(value));paint();return; }
     if(type===0xb0 && note===MoveMainButton && value>0) {
         endEdit();endMasterEdit();for(const clip of pressed.values())clip.used=true;
@@ -260,8 +281,8 @@ globalThis.onMidiMessageInternal=function(data) {
             endEdit();endMasterEdit();
             for(const clip of pressed.values()) { clip.used=true;clip.values={};clip.taps={}; }
             if(selected) { selected.values={};selected.taps={}; }
-            const available=snapshot && snapshot.undo>0;
-            dspSet('undo','1');poll();notice(available?`Undo: ${snapshot.undo} left`:'Nothing to undo');paint();return;
+            const operation=shift?'redo':'undo',available=snapshot && snapshot[operation]>0;
+            dspCritical(operation,'1',100);poll();notice(available?`${shift?'Redo':'Undo'}: ${snapshot[operation]} left`:`Nothing to ${operation}`);paint();return;
         }
         if(note===MoveLoop) { for(const clip of pressed.values())clip.used=true;loop=value>0; if(loop)editScene=snapshot?snapshot.scene:0; paint(); return; }
         if((note===MoveUp || note===MoveDown) && value>0) {
@@ -339,4 +360,4 @@ globalThis.onMidiMessageInternal=function(data) {
         }
     }
 };
-globalThis.onUnload=function() { endEdit();endMasterEdit();pressed.clear();held=null;shift=false;claimVolume(false); };
+globalThis.onUnload=function() { releasePlay(); endEdit();endMasterEdit();pressed.clear();held=null;shift=false;claimVolume(false); };

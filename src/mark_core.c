@@ -1465,6 +1465,17 @@ void mark_scene_cycle(mark_t *m) {
     m->edit_rev++;
 }
 
+/* Twain-only use: seek playback without ending or overwriting a take. */
+int mark_scene_seek(mark_t *m,double frames) {
+    if(m->io_busy || !isfinite(frames) || frames<0)return 0;
+    for(int i=0;i<MARK_TRACKS;i++)if(m->t[i].st==MK_REC || m->t[i].st==MK_DUB)return 0;
+    for(int i=0;i<MARK_TRACKS;i++) {
+        mk_track_t *t=&m->t[i];
+        if(t->len)t->pos=fmod(frames,t->len);
+    }
+    return 1;
+}
+
 /* Absolute length set in SIXTEENTHS of a measure — the step buttons'
  * unit (step 5 = a 5/16 loop), independent of rec_grid. */
 static void track_setlen16(mark_t *m, int ti, int n16) {

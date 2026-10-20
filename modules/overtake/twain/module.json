@@ -2,7 +2,7 @@
   "id": "twain",
   "name": "Twain",
   "abbrev": "TWN",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "Four scenes with eight clips each, selected-clip FX, input monitoring and project saves",
   "dsp": "dsp.so",
   "ui": "ui.js",
@@ -11,9 +11,7 @@
   "capabilities": {
     "audio_in": true,
     "suspend_keeps_js": true,
-    "button_passthrough": [
-      85
-    ]
+    "button_passthrough": []
   },
   "author": "slowslowsteve"
 }

@@ -135,6 +135,7 @@ void mark_process_multi(mark_t *m, const int16_t *const *in_ch,
 /* Twain transport helpers; no effect on Mark's normal render path. */
 double mark_scene_bar_frames(const mark_t *m);
 void mark_scene_cycle(mark_t *m);
+int mark_scene_seek(mark_t *m, double frames);
 void mark_clip_record(mark_t *m, int track, uint32_t frames);
 
 #ifdef MARK_TWAIN

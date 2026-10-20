@@ -7,7 +7,7 @@ const writes=[],leds=new Map(),buttons=new Map(),text=[];
 const params=new Map(),critical=[];let failCritical=false;
 const state={scene:0,pending:-1,bars:[1,4,2,8],phase:0,stopped:0,custom:[0,0,0,0],muted:[0,0,0,0],master:100,master_mute:0,undo:0,
  a:'0,1,2,4|0,0,0,0|0,0,0,0|0|0',b:'4,0,2,0|0,0,0,0|0,0,0,0|0|0',c:'0,0,0,0|0,0,0,0',d:'0,0,0,0|0,0,0,0',armed:Array.from({length:4},()=>[0,0,0,0])};
-const constants={MoveKnob1:71,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,
+const constants={MoveKnob1:71,MovePlay:85,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,
  MoveLoop:58,MoveUndo:56,MoveMainKnob:14,MoveMainButton:3,MoveUp:55,MoveDown:54,MoveShift:49,MoveMute:88,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
 class FakeDate extends Date {static now(){return now;}}
 const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_master_volume:v=>claims.push(v),
@@ -124,7 +124,7 @@ assert.equal(params.get('d_t1_mute'),'1');assert(!writes.slice(start).some(([k])
 // Mute alone toggles on release; repeated down packets cannot toggle twice.
 start=writes.length;cc(88);cc(88);assert.equal(writes.length,start);cc(88,0);
 assert.equal(params.get('master_mute'),'1');cc(88);cc(88,0);assert.equal(params.get('master_mute'),'0');
-state.master_mute=1;state.muted[2]=1;context.onResume();assert.equal(buttons.get(88),124);assert.equal(leds.get(94),118);
+state.master_mute=1;state.muted[2]=1;context.onResume();assert.equal(buttons.get(88),124);assert.equal(leds.get(94),51);
 assert(text.includes('TWN MUTED'));
 // C and D keep independent lengths through the Loop gesture.
 cc(58);down(94);down(20);up(20);down(95);down(30);up(30);cc(58,0);
@@ -176,3 +176,17 @@ const acknowledged=critical.length;now+=1100;context.tick();assert.equal(critica
 cc(54);assert.equal(buttons.get(55),124);assert.equal(buttons.get(54),16);
 cc(55);assert.equal(buttons.get(54),124);assert.equal(buttons.get(55),16);
 console.log('Twain UI: acknowledged monitor writes, failed-delivery retry, periodic repair and bank LEDs passed');
+
+state.redo=5;context.onResume();cc(49);assert.equal(buttons.get(56),124);cc(56);cc(49,0);
+assert.deepEqual(writes.at(-1),['redo','1']);
+state.muted[0]=1;cc(54);cc(55);cc(49);down(92);up(92);cc(49,0);
+assert.equal(leds.get(92),51); // muted selection remains pale purple
+
+// Normal Play reaches Move once; Shift+Play never sends native Play/Stop.
+const native=[];context.move_midi_inject_to_move=packet=>{native.push(Array.from(packet));return true;};
+cc(85);cc(85);cc(85,0);assert.deepEqual(native,[[11,176,85,127],[11,176,85,0]]);
+let jumpStart=writes.length;cc(49);cc(85);cc(49,0);cc(85,0);
+assert(writes.slice(jumpStart).some(([k])=>k==='advance_last'));assert.equal(native.length,2);
+cc(85);cc(49);cc(85,0);cc(49,0);assert.equal(native.length,4); // modifier changes don't strand a held native button
+state.count_in=4;text.length=0;context.onResume();assert(text.includes('Count-in: 4'));
+state.count_in=0;state.advance=1;text.length=0;context.onResume();assert(text.includes('Last bar next'));
