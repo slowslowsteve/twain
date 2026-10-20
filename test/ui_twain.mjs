@@ -207,3 +207,5 @@ cc(86);cc(79,5);cc(86,0);assert.equal(params.get('input_level'),'105');assert.eq
 cc(49);cc(86);cc(79,125);cc(86,0);cc(49,0);assert.equal(params.get('monitor_level'),'97');
 assert.equal(params.get('input_monitor'),priorMon); // monitor adjustment doesn't toggle it
 console.log('Twain UI: quick selected taps, Shift FX, scene range chord and independent input/monitor levels passed');
+
+state.scene=0;state.starts[0]=2;state.bars[0]=5;state.phase=0.5;state.count_in=4;text.length=0;context.onResume();assert(text.includes('A Bar 3/5'));

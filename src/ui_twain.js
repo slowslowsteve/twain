@@ -84,8 +84,10 @@ function paint() {
     }
     if(projects.dirty)print(118,2,'*',1);
     const s=loop?editScene:snapshot.scene, bars=snapshot.bars[s],start=snapshot.starts?.[s] || 0;
+    const activeStart=snapshot.starts?.[snapshot.scene] || 0;
     const phase=Math.max(0,Math.min(snapshot.phase,snapshot.bars[snapshot.scene]-0.0001));
-    const bar=Math.floor(phase)+1, beat=Math.floor((phase%1)*4)+1;
+    const timelinePhase=snapshot.count_in?activeStart+phase:phase;
+    const bar=Math.floor(timelinePhase)+1, beat=Math.floor((phase%1)*4)+1;
     print(2,2,loop?`Set ${label(s)}: ${start+1}-${bars}`:`${label(snapshot.scene)} Bar ${bar}/${snapshot.bars[snapshot.scene]}`,1);
     print(2,14,`${projects.name.slice(0,13)} ${bank?'5-8':'1-4'}`,1);
     if(snapshot.count_in)print(2,28,`Count-in: ${snapshot.count_in}`,1);
@@ -111,13 +113,12 @@ function paint() {
     if(meter)fill_rect(87,44,meter,4,1);
     if(snapshot.clip)print(121,41,'!',1);
     // Persistent segmented timeline: the current bar fills through its beats.
-    const activeStart=snapshot.starts?.[snapshot.scene] || 0;
     const total=snapshot.bars[snapshot.scene]-activeStart, width=124/total;
     for(let i=0;i<total;i++) {
         const x=2+Math.floor(i*width), w=Math.max(2,Math.floor((i+1)*width)-Math.floor(i*width)-1);
         fill_rect(x,54,w,1,1);fill_rect(x,62,w,1,1);
         fill_rect(x,54,1,9,1);fill_rect(x+w-1,54,1,9,1);
-        const progress=Math.max(0,Math.min(1,phase-activeStart-i));
+        const progress=Math.max(0,Math.min(1,timelinePhase-activeStart-i));
         if(progress>0)fill_rect(x+1,56,Math.round((w-2)*progress),5,1);
     }
     for(let i=0;i<16;i++) {
