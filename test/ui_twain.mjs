@@ -4,7 +4,7 @@ import vm from 'node:vm';
 let now=0,reads=0,failed=false;
 const claims=[],rects=[];
 const writes=[],leds=new Map(),buttons=new Map(),text=[];
-const params=new Map();
+const params=new Map(),critical=[];let failCritical=false;
 const state={scene:0,pending:-1,bars:[1,4,2,8],phase:0,stopped:0,custom:[0,0,0,0],muted:[0,0,0,0],master:100,master_mute:0,undo:0,
  a:'0,1,2,4|0,0,0,0|0,0,0,0|0|0',b:'4,0,2,0|0,0,0,0|0,0,0,0|0|0',c:'0,0,0,0|0,0,0,0',d:'0,0,0,0|0,0,0,0',armed:Array.from({length:4},()=>[0,0,0,0])};
 const constants={MoveKnob1:71,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,
@@ -12,6 +12,11 @@ const constants={MoveKnob1:71,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:6
 class FakeDate extends Date {static now(){return now;}}
 const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_master_volume:v=>claims.push(v),
  host_module_set_param(k,v){writes.push([k,v]);params.set(k,v);if(k==='scene')state.pending=Number(v)===state.scene?-1:Number(v);if(k.endsWith('scene_bars'))state.bars['abcd'.indexOf(k[0])]=Number(v);},
+ host_module_set_param_blocking(k,v,timeout){
+  assert.equal(timeout,100);critical.push([k,v]);
+  if(failCritical){failCritical=false;return false;}
+  writes.push([k,v]);params.set(k,v);return true;
+ },
  host_module_get_param(k){reads++; if(failed)return null;return k==='twain_status'?JSON.stringify(state):params.get(k)??'0';},
  fill_rect(...v){rects.push(v);},clear_screen(){},print(x,y,s){text.push(s);}
 });
@@ -144,14 +149,14 @@ assert(!text.some(s=>s.startsWith('Twain volume:')));
 // Bank changes address layers 5-8; selection edits without holding or playback.
 for(const scene of 'abcd')state[scene]='0,0,0,0,0,0,0,0|0';
 state.armed=Array.from({length:4},()=>Array(8).fill(0));state.master_mute=0;
-cc(55);assert(text.includes('Test project 5-8'));
+cc(54);assert(text.includes('Test project 5-8'));
 start=writes.length;cc(49);down(77);up(77);cc(49,0);
 assert(!writes.slice(start).some(([k])=>k.endsWith('_clip')));
 cc(71,9);assert.equal(params.get('b_t7_hp'),'9');
 now+=700;context.tick();assert.deepEqual(writes.at(-1),['edit_end','1']);
 start=writes.length;cc(79,1);assert.equal(writes.length,start); // native master stays native
-cc(54);down(77);up(77);assert.deepEqual(writes.at(-1),['b_t3_clip','1']);
-cc(55);down(68);down(76);up(68);up(76);
+cc(55);down(77);up(77);assert.deepEqual(writes.at(-1),['b_t3_clip','1']);
+cc(54);down(68);down(76);up(68);up(76);
 assert(writes.some(([k])=>k==='a_t8_clip'));assert(writes.some(([k])=>k==='a_t7_clip'));
 // Missing host safety bindings block monitoring; headphones enable it.
 cc(49);cc(86);cc(86,0);cc(49,0);
@@ -161,3 +166,13 @@ context.tick();assert.equal(params.get('monitor_safe'),'1');
 context.host_speaker_active=()=>true;context.tick();assert.equal(params.get('monitor_safe'),'0');
 context.host_line_in_connected=()=>true;context.tick();assert.equal(params.get('monitor_safe'),'1');
 console.log('Twain UI: eight-layer banks, persistent selection, native master and monitor feedback guard passed');
+
+// Failed initial/resume safety writes retry rather than caching an undelivered value.
+context.host_speaker_active=()=>false;context.host_line_in_connected=()=>false;
+params.set('monitor_safe','0');failCritical=true;context.onResume();
+assert.equal(params.get('monitor_safe'),'0');context.tick();assert.equal(params.get('monitor_safe'),'1');
+assert(critical.some(([k])=>k==='input_monitor'));
+const acknowledged=critical.length;now+=1100;context.tick();assert.equal(critical.length,acknowledged+1);
+cc(54);assert.equal(buttons.get(55),124);assert.equal(buttons.get(54),16);
+cc(55);assert.equal(buttons.get(54),124);assert.equal(buttons.get(55),16);
+console.log('Twain UI: acknowledged monitor writes, failed-delivery retry, periodic repair and bank LEDs passed');

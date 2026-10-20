@@ -1,4 +1,4 @@
-# Twain 0.6.0 prototype
+# Twain 0.6.1 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -9,7 +9,7 @@ not modify Schwung or its shortcuts.
 
 The first four pad columns are scenes A, B, C and D. Each contains eight clips,
 shown four at a time from top to bottom; the other four columns are dark.
-Use + for layers 5–8 and − for layers 1–4. Both banks play together; changing
+Use − for layers 5–8 and + for layers 1–4. Both banks play together; changing
 the bank changes only which clips are visible. Only the active scene
 advances. Each clip retains independent audio and settings, with 60 seconds
 of stereo capacity at 44.1 kHz.
@@ -83,7 +83,9 @@ MON means audible monitoring; X means monitoring is requested but blocked.
 A ! holds briefly when the incoming signal clips. Use headphones for the mic.
 The guard requires the installed speaker/line-input host bindings; it blocks
 mic monitoring through the speaker, and permits line input or headphones.
-It keeps checking while Twain is parked. Monitor audio follows Twain master
+It keeps checking while Twain is parked. Safety changes and monitor toggles use
+the host’s acknowledged parameter path; failed safety writes retry and a
+periodic refresh repairs lost state after reconnecting. Monitor audio follows Twain master
 volume/mute and is not a second recording path.
 
 Every new take has a fixed subtle preamp character: light rounding and softened

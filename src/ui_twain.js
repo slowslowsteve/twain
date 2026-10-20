@@ -5,11 +5,13 @@ import { MoveKnob1, MoveMaster, MoveRec, MoveDelete, MoveUndo, MoveLeft, MoveRig
 import { createProjectController } from './twain_projects.mjs';
 import { announce } from '/data/UserData/schwung/shared/screen_reader.mjs';
 const dspGet=host_module_get_param, dspSet=host_module_set_param;
+// Critical monitor switches must survive the host's busy fire-and-forget mailbox.
+const dspCritical=typeof host_module_set_param_blocking==='function'?host_module_set_param_blocking:dspSet;
 const projects=createProjectController({get:dspGet,set:dspSet,notice:text=>notice(text)});
 const FX=['hp','lp','comp','sat','chorus','reverb','delay','delay_rate'];
 const FX_NAMES=['HP filter','LP filter','Compression','Drive','Chorus','Reverb','Delay','Delay rate'];
 const RATES=['1/1','1/2','1/2T','1/4','1/4T','1/8','1/8T','1/16','1/16T','1/32','1/32T','1/64'];
-let bank=0, selected=null, editingClip=null, lastEditAt=0, lastProject=null, lastSafety=-1;
+let bank=0, selected=null, editingClip=null, lastEditAt=0, lastProject=null, lastSafety=-1, lastSafetyAt=-10000;
 let snapshot=null, held=null, rec=false, del=false, loop=false, editScene=0;
 let pressed=new Map(), shift=false, mute=false, muteUsed=false;
 let masterEditing=false;
@@ -26,10 +28,14 @@ function clipAt(note) {
     if(note<68 || note>99 || (note-68)%8>3)return null;
     return {scene:(note-68)%8,track:bank*4+3-Math.floor((note-68)/8),note,used:false,values:{},taps:{},touches:{},editing:false};
 }
-function monitorSafety() {
+function monitorSafety(force=false) {
     const safe=typeof host_speaker_active==='function' && typeof host_line_in_connected==='function' &&
         (!host_speaker_active() || host_line_in_connected())?1:0;
-    if(safe!==lastSafety) { dspSet('monitor_safe',String(safe));lastSafety=safe; }
+    if(force || safe!==lastSafety || Date.now()-lastSafetyAt>=1000) {
+        if(dspCritical('monitor_safe',String(safe),100)!==false) {
+            lastSafety=safe;lastSafetyAt=Date.now();
+        } else lastSafety=-1;
+    }
 }
 function editTarget() { return held || selected; }
 function poll() {
@@ -52,7 +58,7 @@ function paint() {
     if(force)lastForce=now;
     setButtonLED(MoveLoop,loop?124:16,force);
     setButtonLED(MoveRec,rec?BrightRed:shift?(snapshot && snapshot.monitor?Green:16):65,force);
-    setButtonLED(MoveUp,bank===0?124:16,force);setButtonLED(MoveDown,bank===1?124:16,force);
+    setButtonLED(MoveUp,bank===1?124:16,force);setButtonLED(MoveDown,bank===0?124:16,force);
     setButtonLED(MoveDelete,del?124:16,force);
     setButtonLED(MoveMute,snapshot && snapshot.master_mute?124:mute?White:16,force);
     setButtonLED(MoveUndo,snapshot && snapshot.undo>0?124:16,force);
@@ -194,7 +200,7 @@ function muteClip(clip) {
     notice(`${label(clip.scene)}${clip.track+1} ${next==='1'?'muted':'unmuted'}`);
 }
 globalThis.init=function(){monitorSafety();projects.tick(true);refresh();};
-globalThis.onResume=function() { endEdit();endMasterEdit(); pressed.clear();held=null;shift=mute=muteUsed=false; claimVolume(false); rec=del=loop=false; lastForce=-10000;projects.tick(true); refresh(); };
+globalThis.onResume=function() { monitorSafety(true);endEdit();endMasterEdit(); pressed.clear();held=null;shift=mute=muteUsed=false; claimVolume(false); rec=del=loop=false; lastForce=-10000;projects.tick(true); refresh(); };
 globalThis.tick=function() {
     monitorSafety();
     if(editingClip && !held && Date.now()-lastEditAt>600)endEdit();
@@ -260,13 +266,13 @@ globalThis.onMidiMessageInternal=function(data) {
         if(note===MoveLoop) { for(const clip of pressed.values())clip.used=true;loop=value>0; if(loop)editScene=snapshot?snapshot.scene:0; paint(); return; }
         if((note===MoveUp || note===MoveDown) && value>0) {
             endEdit();for(const clip of pressed.values())clip.used=true;
-            pressed.clear();held=null;bank=note===MoveUp?1:0;
+            pressed.clear();held=null;bank=note===MoveDown?1:0;
             const row=selected?selected.track%4:0,scene=selected?selected.scene:(snapshot?snapshot.scene:0);
             selected=clipAt(92-row*8+scene);volumeClaim();refresh();return;
         }
         if(note===MoveRec && shift) {
             if(value>0) {
-                monitorSafety();dspSet('input_monitor',dspGet('input_monitor')==='1'?'0':'1');
+                monitorSafety(true);dspCritical('input_monitor',dspGet('input_monitor')==='1'?'0':'1',100);
                 poll();notice(snapshot && snapshot.monitor_blocked?'Monitor: headphones':snapshot && snapshot.monitor?'Monitor on':'Monitor off');
             }
             rec=false;paint();return;
