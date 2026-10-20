@@ -59,14 +59,12 @@ assert.equal(leds.get(92),97); // subtly tinted empty clip with settings
 assert.equal(leds.get(85),119);
 state.undo=5;context.onResume();assert.equal(buttons.get(56),124);
 cc(56);assert.deepEqual(writes.at(-1),['undo','1']);
-// Touch shows a value; triple touch resets it. Releases aren't additional taps.
+// Touch shows a value; double touch resets it. Releases aren't additional taps.
 params.set('a_t1_lp','73');down(92);
 const changes=writes.length;
 context.onMidiMessageInternal([0x90,1,127]);context.onMidiMessageInternal([0x80,1,0]);
 assert.equal(writes.length,changes);assert(text.includes('A1 LP filter: 73%'));
 now+=100;context.onMidiMessageInternal([0x90,1,127]);context.onMidiMessageInternal([0x80,1,0]);
-assert.equal(writes.length,changes);
-now+=100;context.onMidiMessageInternal([0x90,1,127]);
 assert.deepEqual(writes.at(-1),['a_t1_lp','0']);up(92);
 assert.deepEqual(writes.at(-1),['edit_end','1']);
 assert(!writes.slice(changes).some(([k])=>k==='a_t1_clip'));
@@ -78,10 +76,10 @@ context.onMidiMessageInternal([0x90,0,127]);up(92);
 assert.equal(params.get('a_t1_hp'),'41');
 params.set('b_t1_delay_rate','5');down(93);cc(78,1);up(93);
 assert.equal(params.get('b_t1_delay_rate'),'6');assert(text.includes('B1 Delay rate: 1/8T'));
-// Triple touch knob 8 returns to the default eighth note, not rate index zero.
-down(93);for(let i=0;i<3;i++){now+=100;context.onMidiMessageInternal([0x90,7,127]);context.onMidiMessageInternal([0x80,7,0]);}up(93);
+// Double touch knob 8 returns to the default eighth note, not rate index zero.
+down(93);for(let i=0;i<2;i++){now+=100;context.onMidiMessageInternal([0x90,7,127]);context.onMidiMessageInternal([0x80,7,0]);}up(93);
 assert.equal(params.get('b_t1_delay_rate'),'5');
-console.log('Twain UI: undo, empty-settings tint, touch readout, triple reset and triplet rate passed');
+console.log('Twain UI: undo, empty-settings tint, touch readout, double reset and triplet rate passed');
 
 // Duplicate touch packets while a finger is still resting aren't three taps.
 params.set('a_t1_comp','55');down(92);
@@ -89,7 +87,7 @@ for(let i=0;i<3;i++)context.onMidiMessageInternal([0x90,2,127]);
 up(92);assert.equal(params.get('a_t1_comp'),'55');
 
 params.set('a_t1_level','125');down(92);
-for(let i=0;i<3;i++){now+=100;context.onMidiMessageInternal([0x90,8,127]);context.onMidiMessageInternal([0x80,8,0]);}
+for(let i=0;i<2;i++){now+=100;context.onMidiMessageInternal([0x90,8,127]);context.onMidiMessageInternal([0x80,8,0]);}
 up(92);assert.equal(params.get('a_t1_level'),'100');
 // A duplicate pad note-on must not perform both delete stages in one press.
 cc(119);down(92);const deletes=writes.filter(([k])=>k==='a_t1_clear').length;

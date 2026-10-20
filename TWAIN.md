@@ -1,4 +1,4 @@
-# Twain 0.3.0 prototype
+# Twain 0.3.1 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -25,12 +25,14 @@ top to bottom. The other six columns are deliberately dark.
   saturation, chorus, reverb and tempo-synced eighth-note delay. Zero bypasses
   an effect; amounts are independent per clip and effects can run together.
   Knob 8 chooses a quantized delay rate; unheld FX knobs do nothing. Hold a
-  clip and touch a knob to see its value; three separate touches no more than
-  450 ms apart reset it. Turning between touches cancels the tap sequence.
+  clip and touch a knob to see its value; two separate touches no more than
+  600 ms apart reset it. Turning between touches cancels the tap sequence.
   Volume resets to 100%, effects to 0%, delay rate to 1/8. These touches do
   not launch or stop the clip. Saturation uses RMS output compensation
   with no makeup boost; it is not a guarantee of equal perceived loudness for
-  every signal. Reverb/delay in this prototype are per-clip wet amounts.
+  every signal. Reverb uses a dense, damped stereo tail. Delay amount increases send and
+  repeats together, with feedback capped at 72%. Compression adds up to
+  18 dB automatic makeup gain as its threshold falls.
 - Hold Loop and press bottom step 1–16 to choose that many bars. Left/right
   (or an A/B clip column) chooses which scene's length to edit. Release Loop
   to return to playback progress. A and B have independent lengths.
@@ -99,6 +101,10 @@ workflow; do not rely on them to persist this new clip/FX state. There is no
 crossfade or time stretch. Longer, slower scenes can exceed 60 seconds: a clip
 recording then stops at the capacity limit. Direct resume via Shift+hold step
 13 depends on Schwung's host shortcut handling; this package doesn't modify it.
+On the inspected host, Back parks Twain with audio intact; holding Shift and
+touching Volume while double-tapping step button 13 invokes direct resume
+(the two Tools requests must be close together). This alternative still needs
+a physical test; step 13 is a bottom step button, not a top encoder.
 
 ## Build and install
 
@@ -113,3 +119,13 @@ to obtain `twain-module.tar.gz`; keep that tar.gz intact. In Schwung Manager
 at `http://move.local:7700`, choose **Install Custom Module** and upload it.
 Restart Move when the manager requests it; restart discards unsaved Twain audio.
 Launch Twain via Tools or the overtake menu. No build step deploys to Move.
+
+## Optional host shortcut patch (not part of the Twain archive)
+
+`scripts/prepare-twain-shortcut.py SOURCE OUTPUT` patches a local copy of
+Schwung's installed `shadow_ui.js`. It refuses unknown resume guards and never
+connects to Move. With that host change installed, one Tools shortcut resumes
+Twain when it was the last parked tool; other tools retain their existing
+shortcut behavior. Back must park Twain first. This prepares the change only:
+a Twain module update cannot install a host patch. The patch has not been
+installed or verified on hardware.

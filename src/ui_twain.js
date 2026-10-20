@@ -101,9 +101,9 @@ function knobTouch(controller) {
     held.used=true;
     const value=readValue(param,true); if(value===null)return;
     const now=Date.now(), previous=held.taps[param];
-    const count=previous && now-previous.at<450 ? previous.count+1 : 1;
+    const count=previous && now-previous.at<600 ? previous.count+1 : 1;
     held.taps[param]={at:now,count};
-    if(count===3) {
+    if(count===2) {
         const reset=param==='level'?100:param==='delay_rate'?5:0;
         if(value!==reset) { beginEdit();dspSet(key(held,param),String(reset));held.values[param]=reset; }
         held.taps[param]=null;

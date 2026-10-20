@@ -162,6 +162,8 @@ static void test_clip_fx(void) {
         twain_fx_t *f=calloc(1,sizeof(*f)); assert(f);
         f->delay_rate=TW_RATE_DEFAULT; f->previous_rate=TW_RATE_DEFAULT; f->rate_mix=1;
         f->value[effect]=100; f->dirty=1; twain_fx_prepare(f);
+        /* Let the click-free control ramp settle before the impulse. */
+        for(int n=0;n<4096;n++) { float l=0,r=0;twain_fx_run(f,&l,&r,88200); }
         double before=0,after=0,difference=0,tail=0;
         for(int n=0;n<44100;n++) {
             float input=effect>=5 ? (n==0?12000.0f:0.0f) : 8000.0f*sinf(6.2831853f*1000*n/MARK_SR);
@@ -170,12 +172,42 @@ static void test_clip_fx(void) {
             if(n>22050) { before+=input*input;after+=l*l;difference+=(l-input)*(l-input); }
             if(n>100)tail+=fabsf(l)+fabsf(r);
         }
-        if(effect<3)assert(after<before*0.3);
+        if(effect<2)assert(after<before*0.3);
+        if(effect==2)assert(after>before*1.5 && after<before*4.0);
         if(effect==3)assert(after>before*0.8 && after<before*1.05);
         if(effect==4)assert(difference>before*0.01);
         if(effect>=5)assert(tail>100);
         free(f);
     }
+    /* More delay amount must increase repeat persistence, while every tail decays. */
+    double persistence[2]={0};
+    for(int setting=0;setting<2;setting++) {
+        twain_fx_t *echo=calloc(1,sizeof(*echo));assert(echo);
+        echo->value[6]=setting?100:30;echo->amount[6]=echo->value[6]/100.0f;
+        echo->delay_rate=echo->previous_rate=5;echo->rate_mix=1;
+        double first=0,later=0,end=0;
+        for(int n=0;n<MARK_SR*6;n++) {
+            float l=n==0?12000:0,r=l;twain_fx_run(echo,&l,&r,88200);
+            assert(isfinite(l) && fabsf(l)<32768);
+            if(n>=11025 && n<22050)first+=fabsf(l);
+            if(n>=33075 && n<MARK_SR*2)later+=fabsf(l);
+            if(n>=MARK_SR*5)end+=fabsf(l);
+        }
+        assert(first>0 && end<first*0.01);
+        persistence[setting]=later/first;free(echo);
+    }
+    assert(persistence[1]>persistence[0]*2);
+    /* Percussive reverb must be diffuse rather than four isolated echoes. */
+    twain_fx_t *room=calloc(1,sizeof(*room));assert(room);
+    room->value[5]=100;room->amount[5]=1;
+    int occupied=0;double early=0,late=0;
+    for(int n=0;n<MARK_SR*3;n++) {
+        float l=n==0?12000:0,r=l;twain_fx_run(room,&l,&r,88200);
+        assert(isfinite(l) && fabsf(l)<32768);
+        if(n>4410 && n<22050) { if(fabsf(l)>0.1f)occupied++;early+=l*l; }
+        if(n>MARK_SR*2)late+=l*l;
+    }
+    assert(occupied>12000 && late<early*0.01);free(room);
     twain_fx_t *f=calloc(1,sizeof(*f)); assert(f); f->dirty=1;twain_fx_prepare(f);
     float l=2345,r=-2345;twain_fx_run(f,&l,&r,88200);assert(l==2345 && r==-2345);free(f);
 }

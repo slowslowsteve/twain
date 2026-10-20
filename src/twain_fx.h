@@ -13,9 +13,10 @@ typedef struct {
     int value[7], dirty, delay_rate, previous_rate;
     float rate_mix;
     float amount[7], hp_a, lp_a, hp_z[2], lp_z[2];
-    float env, dry_power, sat_power, phase;
+    float env, dry_power, sat_power, phase, echo_damping[2];
     float delay[2][TW_DELAY], chorus[2][TW_CHORUS];
-    float reverb[2][4][TW_REV];
+    float reverb[2][8][TW_REV], damping[2][8];
+    float diffuser[2][4][1024];
     unsigned dw, cw, rw;
 } twain_fx_t;
 static int twain_fx_index(const char *key) {
@@ -60,10 +61,10 @@ static void twain_fx_run(twain_fx_t *f, float *left, float *right, float bar_fra
     }
     float peak=fmaxf(fabsf(x[0]),fabsf(x[1]));
     f->env+=(peak-f->env)*(peak>f->env ? 0.02f : 0.0003f);
-    /* Hard-knee 12:1 compressor; blend to taste, no automatic makeup gain. */
+    /* One-knob parallel 12:1 compression with up to 18 dB makeup. */
     float threshold=0.35f*powf(0.05f/0.35f,f->amount[2]);
     float gain=f->env>threshold ? powf(threshold/f->env,11.0f/12.0f) : 1.0f;
-    for(int c=0;c<2;c++) x[c]*=1.0f+(gain-1.0f)*f->amount[2];
+    for(int c=0;c<2;c++) x[c]*=(1.0f+(gain-1.0f)*f->amount[2])*powf(10.0f,0.9f*f->amount[2]);
     float drive=1.0f+49.0f*f->amount[3];
     float sat[2]={tanhf(x[0]*drive),tanhf(x[1]*drive)};
     float dry=(x[0]*x[0]+x[1]*x[1])*0.5f;
@@ -76,7 +77,9 @@ static void twain_fx_run(twain_fx_t *f, float *left, float *right, float bar_fra
     for(int c=0;c<2;c++) x[c]+=(sat[c]*norm-x[c])*f->amount[3];
     f->phase+=0.000015f;
     if(f->phase>=1) f->phase-=1;
-    static const unsigned lengths[4]={1557,1867,2111,2539};
+    /* Dense, damped parallel combs followed by four serial allpasses. */
+    static const unsigned lengths[8]={1557,1617,1491,1422,1277,1356,1188,1116};
+    static const unsigned diffusion[4]={556,441,341,225};
     unsigned delay=twain_delay_frames(bar_frames,f->delay_rate);
     unsigned old_delay=twain_delay_frames(bar_frames,f->previous_rate);
     float echo[2];
@@ -92,14 +95,26 @@ static void twain_fx_run(twain_fx_t *f, float *left, float *right, float bar_fra
         f->chorus[c][f->cw]=x[c];
         x[c]+=(chorus-x[c])*f->amount[4]*0.5f;
         float rev=0;
-        for(int j=0;j<4;j++) {
+        for(int j=0;j<8;j++) {
             unsigned pos=f->rw % (lengths[j]+c*23);
             float old=f->reverb[c][j][pos];
-            f->reverb[c][j][pos]=x[c]+old*0.73f;
-            rev+=old*0.16f;
+            f->damping[c][j]+=(old-f->damping[c][j])*0.28f;
+            f->reverb[c][j][pos]=x[c]*0.12f+f->damping[c][j]*0.78f;
+            rev+=old*0.25f;
         }
-        f->delay[c][f->dw]=x[c]+echo[1-c]*0.45f;
-        x[c]+=rev*f->amount[5]+echo[c]*f->amount[6]*0.65f;
+        for(int j=0;j<4;j++) {
+            unsigned pos=f->rw % (diffusion[j]+c*23);
+            float old=f->diffuser[c][j][pos];
+            float output=old-0.5f*rev;
+            f->diffuser[c][j][pos]=rev+0.5f*output;
+            rev=output;
+        }
+        /* Increasing send also lengthens the tail; feedback stays below unity.
+         * A low-pass in the loop makes later repeats softer and darker. */
+        float send=f->amount[6], feedback=0.15f+0.57f*send;
+        f->echo_damping[c]+=(echo[1-c]-f->echo_damping[c])*0.45f;
+        f->delay[c][f->dw]=x[c]*send+f->echo_damping[c]*feedback;
+        x[c]+=rev*f->amount[5]+echo[c]*send*0.8f;
         if(!isfinite(x[c]))x[c]=0;
         if(x[c]>1)x[c]=1;
         if(x[c]<-1)x[c]=-1;
