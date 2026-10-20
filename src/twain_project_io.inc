@@ -49,7 +49,9 @@ static double tw_double(tw_stream *s,double value) {
 static int tw_header(tw_stream *s,tw_project_io *io,int read_name) {
     char magic[8]="TWAIN01\n";tw_bytes(s,magic,8);
     if(memcmp(magic,"TWAIN01\n",8))return 0;
-    if(tw_u32(s,1)!=1 || tw_u32(s,MARK_SR)!=MARK_SR || tw_u32(s,4)!=4 || tw_u32(s,4)!=4)return 0;
+    if(tw_u32(s,1)!=1 || tw_u32(s,MARK_SR)!=MARK_SR || tw_u32(s,4)!=4)return 0;
+    io->file_layers=(int)tw_u32(s,MARK_TRACKS);
+    if(io->file_layers!=4 && io->file_layers!=MARK_TRACKS)return 0;
     io->active=(int)tw_u32(s,(uint32_t)io->active);
     io->master=(int)tw_u32(s,(uint32_t)io->master);io->mute=(int)tw_u32(s,(uint32_t)io->mute);
     for(int i=0;i<4;i++)io->bars[i]=(int)tw_u32(s,(uint32_t)io->bars[i]);
@@ -80,7 +82,7 @@ static int tw_file(twain_t *t,int writing) {
     FILE *f=fopen(writing?temp:path,writing?"wb":"rb");
     if(!f)return !writing && errno==ENOENT?1:3;
     struct stat st;
-    if(!writing && (fstat(fileno(f),&st)||!S_ISREG(st.st_mode)||st.st_size>170000000||st.st_size<184)) { fclose(f);return 2; }
+    if(!writing && (fstat(fileno(f),&st)||!S_ISREG(st.st_mode)||st.st_size>340000000||st.st_size<184)) { fclose(f);return 2; }
     tw_stream s={f,0xffffffffu,writing,0};int result=2;
     if(!tw_header(&s,io,!writing))goto finish;
     for(int scene=0;scene<4;scene++) {
@@ -89,7 +91,7 @@ static int tw_file(twain_t *t,int writing) {
             if(!io->staged[scene]) { result=4;goto finish; }
             mark_set_param(io->staged[scene],"monitor","0");
         }
-        for(int clip=0;clip<4;clip++) {
+        for(int clip=0;clip<io->file_layers;clip++) {
             mark_clip_snapshot_t *c=&io->clips[scene][clip];
             c->len=tw_u32(&s,c->len);c->full_len=tw_u32(&s,c->full_len);
             c->grid=tw_double(&s,c->grid);
@@ -196,7 +198,7 @@ static void tw_io_poll(twain_t *t) {
             for(int i=0;i<4;i++) { mark_t *old=t->scene[i];t->scene[i]=io->staged[i];io->staged[i]=old;t->bars[i]=io->bars[i]; }
             t->active=io->active;t->master_level=io->master;t->master_mute=io->mute;t->master_gain=0;
             t->pending=-1;t->phase=0;t->clock_running=t->clock_ticks=t->cycle_due=t->bar_due=0;
-            t->transport_stopped=1;memset(t->armed,0,sizeof t->armed);
+            t->transport_stopped=1;t->input_monitor=0;memset(t->armed,0,sizeof t->armed);
             t->history_head=t->history_count=0;t->gesture_scene=t->gesture_clip=-1;t->gesture_saved=0;
             t->master_editing=t->master_saved=0;
             memcpy(io->loaded,io->target,37);tw_name(io->name,io->live_name);
@@ -228,7 +230,7 @@ static int tw_io_param(twain_t *t,const char *key,const char *val) {
     if(op==2 && !tw_uuid(val)) { io->result=7;return 1; }
     for(int i=0;i<4;i++) {
         if(op==1 && !mark_project_safe(t->scene[i])) { io->result=6;return 1; }
-        if(op==1)for(int j=0;j<4;j++) {
+        if(op==1)for(int j=0;j<MARK_TRACKS;j++) {
             if(t->armed[i][j]==4 || !mark_project_export(t->scene[i],j,&io->clips[i][j])) { io->result=6;return 1; }
         }
     }

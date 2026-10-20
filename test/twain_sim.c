@@ -6,6 +6,12 @@
 #include <math.h>
 static void expect(twain_t *t, const char *key, const char *want) {
     char buf[256]; twain_get_param(t, key, buf, sizeof buf);
+    char expanded[512];
+    if(strchr(want,',')) {
+        int commas=0;for(const char *p=want;*p;p++)if(*p==',')commas++;
+        if(commas==3) { snprintf(expanded,sizeof expanded,"%s,0,0,0,0",want);want=expanded; }
+    }
+    if(strcmp(buf,want))fprintf(stderr,"%s expected [%s] got [%s]\n",key,want,buf);
     assert(!strcmp(buf, want));
 }
 static int test_signal = 1000;
@@ -92,7 +98,7 @@ static void test_armed_record(void) {
     twain_set_param(t,"a_t1_launch","1");
     expect(t,"tstates","0,0,0,0");
     char status[2048]; twain_get_param(t,"twain_status",status,sizeof status);
-    assert(strstr(status,"\"armed\":[[1,0,0,0]"));
+    assert(strstr(status,"\"armed\":[[1,0,0,0,0,0,0,0]"));
     frames(t,88200-128); expect(t,"tstates","1,0,0,0");
     frames(t,128); expect(t,"tstates","1,0,0,0");
     twain_set_param(t,"a_t2_launch","1");
@@ -326,7 +332,26 @@ static void test_four_scenes_and_mutes(void) {
     twain_destroy(t);
     puts("Twain: four scene boundaries, simultaneous launch, mute transport and master gain passed");
 }
+static void test_input_monitor(void) {
+    twain_t *t=twain_create(NULL,NULL);assert(t);
+    int16_t in[256],out[256];for(int i=0;i<256;i++)in[i]=12000;
+    uint8_t stop=0xfc;twain_on_midi(t,&stop,1,3);
+    twain_set_param(t,"input_monitor","1");
+    twain_process(t,in,out,128);for(int i=0;i<256;i++)assert(out[i]==0);
+    twain_set_param(t,"monitor_safe","1");twain_process(t,in,out,128);
+    assert(out[254]>11800&&out[254]<12000); // gentle rounding, no level boost
+    char status[2048];twain_get_param(t,"twain_status",status,sizeof status);
+    assert(strstr(status,"\"monitor\":1")&&strstr(status,"\"input\":0.366"));
+    twain_set_param(t,"monitor_safe","0");twain_process(t,in,out,128);
+    for(int i=0;i<256;i++)assert(out[i]==0);
+    twain_get_param(t,"twain_status",status,sizeof status);assert(strstr(status,"\"monitor_blocked\":1"));
+    twain_set_param(t,"input_monitor","0");for(int i=0;i<256;i++)in[i]=32767;
+    twain_process(t,in,out,128);twain_get_param(t,"twain_status",status,sizeof status);
+    assert(strstr(status,"\"clip\":1"));for(int i=0;i<256;i++)assert(out[i]==0);
+    twain_destroy(t);puts("Twain: stopped-transport monitoring, feedback gate, subtle warmth and raw input meter passed");
+}
 int main(void) {
+    test_input_monitor();
     test_four_scenes_and_mutes();
     test_scene_grid();
     test_history();
@@ -362,5 +387,5 @@ int main(void) {
     twain_process(t,silence,b,128);
     assert(a[254] > 0 && b[254] > a[254]);
     render(t,200); twain_set_param(t,"scene","invalid"); expect(t,"scene","1");
-    twain_destroy(t); puts("Twain: four scenes / sixteen independent clips passed");
+    twain_destroy(t); puts("Twain: four scenes / eight layers per scene passed");
 }

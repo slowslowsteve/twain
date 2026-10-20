@@ -40,7 +40,7 @@ static void copy_corrupt(const char *from,const char *to) {
 static void compare_saved_clips(const char *a,const char *b) {
     FILE *x=fopen(a,"rb"),*y=fopen(b,"rb");assert(x&&y);
     assert(!fseek(x,180,SEEK_SET)&&!fseek(y,180,SEEK_SET));
-    for(int clip=0;clip<16;clip++) {
+    for(int clip=0;clip<32;clip++) {
         unsigned char hx[56],hy[56];assert(fread(hx,1,56,x)==56&&fread(hy,1,56,y)==56);
         assert(!memcmp(hx,hy,56));uint32_t frames;memcpy(&frames,hx+4,4);
         size_t bytes=(size_t)frames*4;unsigned char bx[4096],by[4096];
@@ -49,6 +49,23 @@ static void compare_saved_clips(const char *a,const char *b) {
         }
     }
     fclose(x);fclose(y);
+}
+// Build a genuine pre-eight-layer layout, with an independently calculated CRC.
+static void legacy_copy(const char *from,const char *to) {
+    FILE *f=fopen(from,"rb");assert(f);assert(!fseek(f,0,SEEK_END));long size=ftell(f);rewind(f);
+    unsigned char *src=malloc(size),*dst=malloc(size);assert(src&&dst);
+    assert(fread(src,1,size,f)==(size_t)size);fclose(f);
+    memcpy(dst,src,180);dst[20]=4;dst[21]=dst[22]=dst[23]=0;
+    size_t at=180,out=180;
+    for(int scene=0;scene<4;scene++)for(int clip=0;clip<8;clip++) {
+        uint32_t frames=src[at+4]|(uint32_t)src[at+5]<<8|(uint32_t)src[at+6]<<16|(uint32_t)src[at+7]<<24;
+        size_t bytes=56+(size_t)frames*4;assert(at+bytes<=(size_t)size-4);
+        if(clip<4) { memcpy(dst+out,src+at,bytes);out+=bytes; }at+=bytes;
+    }
+    uint32_t crc=0xffffffffu;
+    for(size_t i=0;i<out;i++) { crc^=dst[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xedb88320u&-(crc&1)); }
+    crc^=0xffffffffu;for(int i=0;i<4;i++)dst[out++]=(unsigned char)(crc>>(8*i));
+    f=fopen(to,"wb");assert(f);assert(fwrite(dst,1,out,f)==out);assert(!fclose(f));free(src);free(dst);
 }
 int main(void) {
     char root[]="/tmp/twain-project-test-XXXXXX";assert(mkdtemp(root));
@@ -60,10 +77,10 @@ int main(void) {
     for(int scene=0;scene<4;scene++) {
         test_input=1000+scene*2000;
         char value[16],key[32];snprintf(value,sizeof value,"%d",scene);twain_set_param(t,"scene",value);
-        for(int clip=1;clip<=4;clip++) { snprintf(key,sizeof key,"%c_t%d_record",'a'+scene,clip);twain_set_param(t,key,"1"); }
+        for(int clip=1;clip<=8;clip++) { snprintf(key,sizeof key,"%c_t%d_record",'a'+scene,clip);twain_set_param(t,key,"1"); }
         twain_set_param(t,"project_save","1");wait_job(t,6); // armed or recording is never snapshotted
         clocks(t,96);clocks(t,96);
-        for(int clip=1;clip<=4;clip++) {
+        for(int clip=1;clip<=8;clip++) {
             snprintf(key,sizeof key,"%c_t%d_lp",'a'+scene,clip);snprintf(value,sizeof value,"%d",scene*10+clip);twain_set_param(t,key,value);
             const char *fx[]={"hp","comp","sat","chorus","reverb","delay"};
             for(int effect=0;effect<6;effect++) { snprintf(key,sizeof key,"%c_t%d_%s",'a'+scene,clip,fx[effect]);twain_set_param(t,key,value); }
@@ -93,7 +110,7 @@ int main(void) {
     copy_corrupt(fileA,fileB);twain_set_param(t,"project_load",B);wait_job(t,2);
     expect(t,"d_t1_lp","99");expect(t,"d_t1_len","0");
     twain_set_param(t,"project_load",A);wait_job(t,0);
-    for(int scene=0;scene<4;scene++)for(int clip=1;clip<=4;clip++) {
+    for(int scene=0;scene<4;scene++)for(int clip=1;clip<=8;clip++) {
         char k[32],v[16];snprintf(k,sizeof k,"%c_t%d_lp",'a'+scene,clip);snprintf(v,sizeof v,"%d",scene*10+clip);expect(t,k,v);
         const char *fx[]={"hp","comp","sat","chorus","reverb","delay"};
         for(int effect=0;effect<6;effect++) { snprintf(k,sizeof k,"%c_t%d_%s",'a'+scene,clip,fx[effect]);expect(t,k,v); }
@@ -102,7 +119,7 @@ int main(void) {
         snprintf(k,sizeof k,"%c_t%d_len",'a'+scene,clip);twain_get_param(t,k,v,sizeof v);assert(atoi(v)>0);
     }
     expect(t,"b_t2_mute","1");expect(t,"master_level","81");expect(t,"master_mute","1");expect(t,"scene","3");
-    expect(t,"c_scene_bars","3");expect(t,"d_scene_bars","4");expect(t,"tstates","4,4,4,4");expect(t,"undo_count","0");
+    expect(t,"c_scene_bars","3");expect(t,"d_scene_bars","4");expect(t,"tstates","4,4,4,4,4,4,4,4");expect(t,"undo_count","0");
     // A duplicate loads the chosen source into B and remains dirty until saved.
     live(t,B,2,"Set B Copy");twain_set_param(t,"project_load",A);wait_job(t,0);
     twain_get_param(t,"project_status",status,sizeof status);assert(strstr(status,B)&&strstr(status,"\"dirty\":1"));
@@ -117,6 +134,14 @@ int main(void) {
     twain_set_param(t,"d_t1_lp","55");twain_set_param(t,"project_dir",bad);twain_set_param(t,"project_save","1");wait_job(t,3);
     expect(t,"d_t1_lp","55");twain_get_param(t,"project_status",status,sizeof status);assert(strstr(status,"\"dirty\":1"));
     twain_set_param(t,"project_dir",root);twain_set_param(t,"project_load",B);wait_job(t,0);expect(t,"d_t1_lp","31");
+    legacy_copy(fileA,fileB);twain_set_param(t,"input_monitor","1");
+    twain_set_param(t,"project_load",B);wait_job(t,0);expect(t,"input_monitor","0");
+    for(int scene=0;scene<4;scene++)for(int clip=1;clip<=8;clip++) {
+        char k[32],v[32];snprintf(k,sizeof k,"%c_t%d_lp",'a'+scene,clip);
+        snprintf(v,sizeof v,"%d",clip<=4?scene*10+clip:0);expect(t,k,v);
+        snprintf(k,sizeof k,"%c_t%d_len",'a'+scene,clip);twain_get_param(t,k,v,sizeof v);
+        assert(clip<=4?atoi(v)>0:atoi(v)==0);
+    }
     twain_destroy(t);unlink(fileA);unlink(fileB);unlink(bad);rmdir(root);
-    puts("Twain projects: all 16 clips round-trip, CRC failure isolation, duplicate copy, late identity change and failed-save recovery passed");
+    puts("Twain projects: all 32 clips round-trip, legacy 16-clip loading, CRC failure isolation, duplicate copy, late identity change and failed-save recovery passed");
 }

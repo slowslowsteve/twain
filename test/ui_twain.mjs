@@ -8,7 +8,7 @@ const params=new Map();
 const state={scene:0,pending:-1,bars:[1,4,2,8],phase:0,stopped:0,custom:[0,0,0,0],muted:[0,0,0,0],master:100,master_mute:0,undo:0,
  a:'0,1,2,4|0,0,0,0|0,0,0,0|0|0',b:'4,0,2,0|0,0,0,0|0,0,0,0|0|0',c:'0,0,0,0|0,0,0,0',d:'0,0,0,0|0,0,0,0',armed:Array.from({length:4},()=>[0,0,0,0])};
 const constants={MoveKnob1:71,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,
- MoveLoop:58,MoveUndo:56,MoveMainKnob:14,MoveMainButton:3,MoveShift:49,MoveMute:88,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
+ MoveLoop:58,MoveUndo:56,MoveMainKnob:14,MoveMainButton:3,MoveUp:55,MoveDown:54,MoveShift:49,MoveMute:88,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
 class FakeDate extends Date {static now(){return now;}}
 const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_master_volume:v=>claims.push(v),
  host_module_set_param(k,v){writes.push([k,v]);params.set(k,v);if(k==='scene')state.pending=Number(v)===state.scene?-1:Number(v);if(k.endsWith('scene_bars'))state.bars['abcd'.indexOf(k[0])]=Number(v);},
@@ -26,16 +26,16 @@ const cc=(n,v=127)=>context.onMidiMessageInternal([0xb0,n,v]);
 const down=n=>context.onMidiMessageInternal([0x90,n,127]);
 const up=n=>context.onMidiMessageInternal([0x80,n,0]);
 context.init();
-assert.equal(leds.get(92),119);assert.equal(leds.get(85),119); // A1/B2 columns
+assert.equal(leds.get(92),120);assert.equal(leds.get(85),119); // A1/B2 columns
 assert.equal(leds.get(94),119);assert.equal(leds.get(99),0); // C is available; unused pads dark
 assert.equal(buttons.get(58),16);
-down(92);assert.equal(writes.length,0);up(92);assert.deepEqual(writes.at(-1),['a_t1_clip','1']);
+down(92);assert.deepEqual(writes.at(-1),['monitor_safe','0']);up(92);assert.deepEqual(writes.at(-1),['a_t1_clip','1']);
 cc(86);down(85);up(85);cc(86,0);assert.deepEqual(writes.at(-1),['b_t2_record','1']);
 cc(119);down(76);up(76);cc(119,0);assert.deepEqual(writes.at(-1),['a_t3_clear','1']);
 cc(58);assert.equal(buttons.get(58),124);down(19);up(19);assert.deepEqual(writes.at(-1),['a_scene_bars','4']);
 cc(63);down(31);up(31);assert.deepEqual(writes.at(-1),['b_scene_bars','16']);
 cc(58,0);assert.equal(buttons.get(58),16);assert(text.includes('A Bar 1/4'));
-const before=writes.length;cc(71,5);assert.equal(writes.length,before); // no clip, no arbitrary scene/FX changes
+const before=writes.length;cc(71,5);assert(writes.some(([k,v])=>k==='a_t3_hp'&&v==='5')); // selected clip remains editable
 params.set('a_t1_level','100');down(92);cc(79,5);up(92);assert(writes.some(([k,v])=>k==='a_t1_level'&&v==='105'));assert.deepEqual(writes.at(-1),['edit_end','1']);
 assert(!writes.slice(before).some(([k])=>k==='scene'||k.endsWith('_clip')));
 const fx=['hp','lp','comp','sat','chorus','reverb','delay'];
@@ -120,7 +120,7 @@ assert.equal(params.get('d_t1_mute'),'1');assert(!writes.slice(start).some(([k])
 start=writes.length;cc(88);cc(88);assert.equal(writes.length,start);cc(88,0);
 assert.equal(params.get('master_mute'),'1');cc(88);cc(88,0);assert.equal(params.get('master_mute'),'0');
 state.master_mute=1;state.muted[2]=1;context.onResume();assert.equal(buttons.get(88),124);assert.equal(leds.get(94),118);
-assert(text.includes('TWAIN MUTED'));
+assert(text.includes('TWN MUTED'));
 // C and D keep independent lengths through the Loop gesture.
 cc(58);down(94);down(20);up(20);down(95);down(30);up(30);cc(58,0);
 assert.equal(params.get('c_scene_bars'),'5');assert.equal(params.get('d_scene_bars'),'15');
@@ -140,3 +140,24 @@ assert(!text.some(s=>s.includes('Tap clip:')||s.includes('Hold Loop:')||s.includ
 // Twain master level updates only its persistent row, with no transient duplicate.
 text.length=0;params.set('master_level','100');cc(49);cc(79,125);cc(49,0);
 assert(!text.some(s=>s.startsWith('Twain volume:')));
+
+// Bank changes address layers 5-8; selection edits without holding or playback.
+for(const scene of 'abcd')state[scene]='0,0,0,0,0,0,0,0|0';
+state.armed=Array.from({length:4},()=>Array(8).fill(0));state.master_mute=0;
+cc(55);assert(text.includes('Test project 5-8'));
+start=writes.length;cc(49);down(77);up(77);cc(49,0);
+assert(!writes.slice(start).some(([k])=>k.endsWith('_clip')));
+cc(71,9);assert.equal(params.get('b_t7_hp'),'9');
+now+=700;context.tick();assert.deepEqual(writes.at(-1),['edit_end','1']);
+start=writes.length;cc(79,1);assert.equal(writes.length,start); // native master stays native
+cc(54);down(77);up(77);assert.deepEqual(writes.at(-1),['b_t3_clip','1']);
+cc(55);down(68);down(76);up(68);up(76);
+assert(writes.some(([k])=>k==='a_t8_clip'));assert(writes.some(([k])=>k==='a_t7_clip'));
+// Missing host safety bindings block monitoring; headphones enable it.
+cc(49);cc(86);cc(86,0);cc(49,0);
+assert.equal(params.get('input_monitor'),'1');assert.equal(params.get('monitor_safe'),'0');
+context.host_speaker_active=()=>false;context.host_line_in_connected=()=>false;
+context.tick();assert.equal(params.get('monitor_safe'),'1');
+context.host_speaker_active=()=>true;context.tick();assert.equal(params.get('monitor_safe'),'0');
+context.host_line_in_connected=()=>true;context.tick();assert.equal(params.get('monitor_safe'),'1');
+console.log('Twain UI: eight-layer banks, persistent selection, native master and monitor feedback guard passed');

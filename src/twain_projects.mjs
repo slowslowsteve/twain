@@ -120,5 +120,5 @@ export function createProjectController({get,set,probe=probeProjectIdentity,noti
     return {tick,click,move,view,
         guard(){tick(true);return mode==='performance' && !!live && status?.id===live.id && !status.busy;},
         get modal(){return mode!=='performance';},get busy(){return mode==='busy';},
-        get dirty(){return !!status?.dirty;},get name(){return live?.name || 'Twain';}};
+        get dirty(){return !!status?.dirty;},get id(){return status?.id || '';},get name(){return live?.name || 'Twain';}};
 }

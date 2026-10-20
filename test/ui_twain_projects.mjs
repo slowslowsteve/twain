@@ -8,7 +8,7 @@ const status={id,dirty:1,busy:0,result:0,serial:0};
 const state={scene:0,pending:-1,bars:[1,1,1,1],phase:0,stopped:0,custom:[0,0,0,0],muted:[0,0,0,0],master:100,master_mute:0,undo:0,
  a:'4,0,0,0|0',b:'0,0,0,0|0',c:'0,0,0,0|0',d:'0,0,0,0|0',armed:Array.from({length:4},()=>[0,0,0,0])};
 class Clock extends Date { static now(){return now;} }
-const constants={MoveKnob1:71,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,MoveLoop:58,MoveUndo:56,MoveMainKnob:14,MoveMainButton:3,MoveShift:49,MoveMute:88,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
+const constants={MoveKnob1:71,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,MoveLoop:58,MoveUndo:56,MoveMainKnob:14,MoveMainButton:3,MoveUp:55,MoveDown:54,MoveShift:49,MoveMute:88,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
 const context=vm.createContext({Date:Clock,host_move_model_state:()=>ready?[1,7,7]:[1,8,7],
  shadow_get_param:(slot,key)=>{assert.equal(slot,0);assert.equal(key,'active_set');return `${id}\nSet A\n7`;},
  host_module_get_param:key=>key==='project_status'?JSON.stringify(status):key==='twain_status'?JSON.stringify(state):key==='project_name'?'Set A':key==='master_level'?String(state.master):'0',
@@ -26,7 +26,7 @@ async function link(spec) {
 }
 const ui=new vm.SourceTextModule(fs.readFileSync('src/ui_twain.js','utf8'),{context});await ui.link(link);await ui.evaluate();
 const midi=(type,n,v=127)=>context.onMidiMessageInternal([type,n,v]);
-context.init();assert(frame.includes('*'));assert(frame.includes('Set A'));
+context.init();assert(frame.includes('*'));assert(frame.includes('Set A 1-4'));
 midi(0xb0,3);assert(writes.some(([key])=>key==='project_save'));assert(frame.includes('Saving Twain...'));
 let start=writes.length;midi(0x90,92);midi(0x80,92,0);assert(!writes.slice(start).some(([key])=>key.endsWith('_clip')));
 status.busy=0;status.dirty=0;now+=600;context.tick();assert(!frame.includes('*'));

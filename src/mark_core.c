@@ -2472,8 +2472,8 @@ void mark_set_param(mark_t *m, const char *key, const char *val) {
     }
     if (m->io_busy) return;
 
-    /* per-track keys: t<1-5>_... */
-    if (key[0] == 't' && key[1] >= '1' && key[1] <= '5' && key[2] == '_') {
+    /* per-track keys: t<1-MARK_TRACKS>_... */
+    if (key[0] == 't' && key[1] >= '1' && key[1] <= '0' + MARK_TRACKS && key[2] == '_') {
         int ti = key[1] - '1';
         if (ti >= MARK_TRACKS) return;
         const char *k = key + 3;
@@ -2691,7 +2691,7 @@ static int g_fxp(const mk_track_t *t)   { return t->fxp; }
 int mark_get_param(mark_t *m, const char *key, char *buf, int buf_len) {
     if (!m || !key || !buf || buf_len < 2) return -1;
 
-    if (key[0] == 't' && key[1] >= '1' && key[1] <= '5' && key[2] == '_') {
+    if (key[0] == 't' && key[1] >= '1' && key[1] <= '0' + MARK_TRACKS && key[2] == '_') {
         int ti = key[1] - '1';
         if (ti >= MARK_TRACKS) return -1;
         const char *k = key + 3;

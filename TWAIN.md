@@ -1,4 +1,4 @@
-# Twain 0.5.1 prototype
+# Twain 0.6.0 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -7,8 +7,10 @@ not modify Schwung or its shortcuts.
 
 ## Make music
 
-The first four pad columns are scenes A, B, C and D. Each contains four clips
-from top to bottom; the other four columns are dark. Only the active scene
+The first four pad columns are scenes A, B, C and D. Each contains eight clips,
+shown four at a time from top to bottom; the other four columns are dark.
+Use + for layers 5–8 and − for layers 1–4. Both banks play together; changing
+the bank changes only which clips are visible. Only the active scene
 advances. Each clip retains independent audio and settings, with 60 seconds
 of stereo capacity at 44.1 kHz.
 
@@ -31,9 +33,12 @@ of stereo capacity at 44.1 kHz.
 - Mute alone toggles Twain master mute on release. Mute+clip toggles only that
   clip's mute; either press order works, and a multi-clip mute chord works too.
   Neither mute stops transport, changes clip volume, or launches clips.
-- Hold a clip and turn knobs 1–7 for HP filter, LP filter, compression,
+- Tap a clip to select it and queue play/stop. Shift+pad selects without
+  changing playback. Knobs stay assigned to this selection after release.
+  Holding a different pad and turning a knob selects and edits without launching.
+- Turn knobs 1–7 for HP filter, LP filter, compression,
   Drive, chorus, reverb and delay. Knob 8 chooses a quantized delay rate.
-  Unheld FX knobs do nothing. Touch a knob while holding a clip to see its
+  Touch a knob to see the selected clip’s
   value; two separate touches within 600 ms reset it. Turns cancel the tap
   sequence. Effects reset to zero, volume to 100%, delay rate to 1/8.
 - Hold Loop and press bottom step 1–16 to select scene length. While Loop is
@@ -50,9 +55,9 @@ boundaries. Stop pauses transport; Start/Continue restart at bar 1.
 
 ## Screen and pads
 
-The top shows the active scene and Bar 3/8, followed by all four scene lengths.
+The top shows the active scene and Bar 3/8, followed by the project name and visible layer bank.
 The middle shows recording, queued recording/scene, or the parameter being
-adjusted. Twain master volume or a persistent TWAIN MUTED indicator appears
+adjusted. Twain master volume or a persistent TWN MUTED indicator appears
 above a bottom progress strip. Each outlined segment is one bar, filling
 through that bar's beats; even a one-bar scene has visible beat progress.
 There are no permanent instruction rows. Bottom hardware steps still follow
@@ -61,7 +66,7 @@ the bar/beat and select length while Loop is held.
 Empty pads are dim neutral; empty clips with retained settings have a subtle
 scene tint. Recording is red, playing green, stopped amber, and muted clips
 are light grey. Queued actions blink; the queued scene pulses. Held pads turn
-white. Loop, Record, Delete, Undo and Mute indicate their availability/state.
+white; the selected clip stays white and its state appears on screen. Loop, Record, Delete, Undo and Mute indicate their availability/state.
 A periodic LED refresh repairs native feedback overwrites. Parked Twain skips
 screen work and releases stale held-pad/volume gestures.
 
@@ -69,6 +74,21 @@ Volume gestures require `shadow_set_overtake_suppress_master_volume`, present
 in the inspected installed host. Without it, Twain reports that the volume
 edit is unavailable. Physical Volume ownership, pad chords, the new screen
 and LED reliability still require a hardware pass.
+
+## Input and recording character
+
+Shift+Record toggles monitoring, off by default and reset off on project load.
+The input meter remains visible beside Twain’s volume, including while stopped.
+MON means audible monitoring; X means monitoring is requested but blocked.
+A ! holds briefly when the incoming signal clips. Use headphones for the mic.
+The guard requires the installed speaker/line-input host bindings; it blocks
+mic monitoring through the speaker, and permits line input or headphones.
+It keeps checking while Twain is parked. Monitor audio follows Twain master
+volume/mute and is not a second recording path.
+
+Every new take has a fixed subtle preamp character: light rounding and softened
+highs, baked in once before capture. There is no clean/warm switch or flutter.
+Existing recordings are unchanged and loading never reapplies the colour.
 
 ## Effects and undo
 
@@ -80,7 +100,7 @@ Compression blends hard-knee 12:1 compression with up to 18 dB automatic makeup.
 Drive replaces the former saturation with four-times interpolated soft clipping,
 a gentle asymmetric curve, tone filtering and DC removal. It retains RMS
 compensation without makeup gain; saved `sat` values remain compatible. All effects are per clip;
-sound quality and CPU with four fully effected clips need listening on Move.
+sound quality and CPU with eight fully effected clips need listening on Move.
 
 Knob 8 rates, shortest to longest counterclockwise:
 1/64, 1/32T, 1/32, 1/16T, 1/16, 1/8T, 1/8 (default), 1/4T, 1/4,
@@ -89,7 +109,7 @@ crossfade over 20 ms. The delay buffer supports a full bar down to 20 BPM.
 
 Undo reverses five edits across all four scenes: audio replacement/deletion,
 settings reset, volume/FX edits, mutes, master controls and scene lengths.
-A held-pad editing gesture is one step; Shift-held master-volume turns are
+A held-pad editing gesture is one step; unheld knob edits group until 600 ms idle; Shift-held master-volume turns are
 one step too. Playback/scene requests do not fill history. There is no redo.
 Undo restores audio and control values, not FX tail memory. Five preallocated
 60-second spare buffers swap ownership instead of copying audio on render.
@@ -122,7 +142,7 @@ Set 23, a new Set 24 and its copy, not the execution of the in-module gate.
   it cannot undo the native Move switch. Reopen that Move project or click
   the jog again to revisit switching. A choice from an obsolete project's
   dialog is not applied to a newly opened project.
-- All four scenes, 16 clips' raw stereo audio, seven FX amounts, delay rates,
+- All four scenes, 32 clips' raw stereo audio, seven FX amounts, delay rates,
   clip volume/mute, scene lengths, selected scene and master volume/mute save
   together. Playback reloads stopped at bar 1; FX tails and undo history are
   not saved. Press native Play and launch clips to continue.
@@ -152,9 +172,12 @@ checks reject a changed target before publishing the staged project.
 
 No file I/O, buffer copying or allocation occurs on render. A persistent worker
 is created with Twain. Saves borrow stable audio buffers while mutation is
-locked; loads temporarily need roughly another 273 MiB for private engines
-on top of the approximately 326 MiB normal audio/FX/undo budget. Allocation
-fails safely rather than reducing 60-second capacity. Four native generators
+locked; loads temporarily need roughly another 510 MiB for private engines
+on top of the approximately 561 MiB normal audio/FX/undo budget. Allocation
+fails safely rather than reducing 60-second capacity. Old four-layer saves load with layers 5–8 empty; new saves contain eight
+layers and cannot be opened by older Twain versions. Save before upgrading
+and keep backups of important .twp files. Empty calloc pages need not occupy
+physical RAM until touched; the full reserved budget is still higher. Four native generators
 remain available. Sound, CPU/disk timing and real power-cycle recovery still
 need hardware verification. No time stretch or scene crossfade.
 

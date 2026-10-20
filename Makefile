@@ -38,7 +38,7 @@ test-ui:
 	node --no-warnings --experimental-vm-modules test/ui_twain_projects.mjs
 	python3 -B test/twain_project_probe.py
 
-TWAIN_FLAGS = -DMARK_TRACKS=4 -DMARK_REQUIRE_FULL_CAPACITY -DMARK_TWAIN
+TWAIN_FLAGS = -DMARK_TRACKS=8 -DMARK_REQUIRE_FULL_CAPACITY -DMARK_TWAIN
 build/twain_sim: src/mark_core.c src/twain_core.c src/twain_core.h src/twain_project_io.h src/twain_project_io.inc src/mark_core.h src/twain_fx.h test/twain_sim.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(TWAIN_FLAGS) src/mark_core.c src/twain_core.c test/twain_sim.c -o $@ -lm -lpthread

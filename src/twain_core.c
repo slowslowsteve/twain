@@ -1,12 +1,12 @@
 /* Four retained scenes. Only the selected scene advances or records.
- * Compile with MARK_TRACKS=4 and MARK_REQUIRE_FULL_CAPACITY. */
+ * Compile with MARK_TRACKS=8 and MARK_REQUIRE_FULL_CAPACITY. */
 #include "twain_core.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#if MARK_TRACKS != 4 || MARK_MAX_SECONDS != 60 || !defined(MARK_REQUIRE_FULL_CAPACITY)
-#error Twain requires four 60-second layers per scene
+#if MARK_TRACKS != 8 || MARK_MAX_SECONDS != 60 || !defined(MARK_REQUIRE_FULL_CAPACITY)
+#error Twain requires eight 60-second layers per scene
 #endif
 #include "twain_project_io.h"
 #define TW_HISTORY 5
@@ -20,8 +20,9 @@ struct twain {
     const host_api_v1_t *host; char module_dir[512]; tw_project_io io;
     mark_t *scene[TW_SCENES]; int active; int pending; int bars[TW_SCENES]; double phase;
     int clock_running, clock_ticks, cycle_due, transport_stopped, bar_due;
-    int armed[TW_SCENES][4];
+    int armed[TW_SCENES][MARK_TRACKS];
     int master_level, master_mute, master_editing, master_saved; float master_gain;
+    int input_monitor, monitor_safe, input_clip; float input_peak, warm_z[2];
     twain_edit_t history[TW_HISTORY];
     int history_head, history_count;
     int gesture_scene, gesture_clip, gesture_saved;
@@ -93,7 +94,7 @@ static void launch_armed(twain_t *t, int scene_start) {
     int scene = t->active;
     char quantize[8];
     mark_get_param(t->scene[scene], "quantize", quantize, sizeof quantize);
-    for (int i = 0; i < 4; i++) if (t->armed[scene][i]) {
+    for (int i = 0; i < MARK_TRACKS; i++) if (t->armed[scene][i]) {
         int action=t->armed[scene][i];
         if (action==4 && !scene_start) continue;
         char key[24];
@@ -132,7 +133,22 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
     tw_io_poll(t);
     if (n <= 0) return;
     if (n > 128) n = 128;
-    if ((t->io.identity_enabled && (!t->io.live[0] || strcmp(t->io.live,t->io.loaded))) || t->transport_stopped) { memset(out, 0, (size_t)n * 2 * sizeof(*out)); return; }
+    int16_t warm[256];float peak=0;
+    for(int i=0;i<n;i++)for(int c=0;c<2;c++) {
+        float raw=in?in[i*2+c]/32768.0f:0;
+        if(fabsf(raw)>peak)peak=fabsf(raw);
+        // Fixed preamp rounding and gentle top-end softening, once per input.
+        float rounded=raw-0.025f*raw*raw*raw;
+        t->warm_z[c]+=(rounded-t->warm_z[c])*0.78f;
+        warm[i*2+c]=(int16_t)(t->warm_z[c]*32767.0f);
+    }
+    t->input_peak=fmaxf(peak,t->input_peak*0.94f);
+    if(peak>=0.997f)t->input_clip=MARK_SR;
+    else t->input_clip=t->input_clip>n?t->input_clip-n:0;
+    if(t->io.identity_enabled && (!t->io.live[0] || strcmp(t->io.live,t->io.loaded))) {
+        memset(out,0,(size_t)n*2*sizeof(*out));return;
+    }
+    if(t->transport_stopped) { memset(out,0,(size_t)n*2*sizeof(*out));goto master_mix; }
     if (t->cycle_due) cycle(t);
     else if (t->bar_due) { launch_armed(t, t->clock_ticks==0); t->bar_due = 0; }
     int done = 0;
@@ -147,7 +163,7 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
             if (left <= 0.000001) { cycle(t); continue; }
             if (left < count) count = (int)ceil(left - 0.000001);
         }
-        mark_process(t->scene[t->active], in ? in + done * 2 : NULL,
+        mark_process(t->scene[t->active], warm + done * 2,
                      out + done * 2, count);
         done += count;
         if (!t->clock_running) {
@@ -156,11 +172,12 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
             else if (t->phase + 1e-9 >= next_bar) launch_armed(t, 0);
         }
     }
+master_mix:;
     float target=t->master_mute?0:t->master_level/100.0f;
     for(int i=0;i<n;i++) {
         t->master_gain+=(target-t->master_gain)*0.002f;
         for(int c=0;c<2;c++) {
-            float value=out[i*2+c]*t->master_gain;
+            float value=(out[i*2+c]+(t->input_monitor && t->monitor_safe?warm[i*2+c]:0))*t->master_gain;
             out[i*2+c]=(int16_t)fmaxf(-32768,fminf(32767,value));
         }
     }
@@ -168,6 +185,8 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
 void twain_set_param(twain_t *t, const char *key, const char *val) {
     tw_io_poll(t);
     if(tw_io_param(t,key,val))return;
+    if(!strcmp(key,"input_monitor")) { t->input_monitor=atoi(val)!=0;return; }
+    if(!strcmp(key,"monitor_safe")) { t->monitor_safe=atoi(val)!=0;return; }
     if(atomic_load(&t->io.state))return;
     if(!strcmp(key,"master_level") || !strcmp(key,"master_mute")) {
         int mute=!strcmp(key,"master_mute"),max=mute?1:200;
@@ -195,7 +214,7 @@ void twain_set_param(twain_t *t, const char *key, const char *val) {
         t->gesture_scene=t->gesture_clip=-1; t->gesture_saved=0; return;
     }
     if(!strcmp(key,"edit_begin")) {
-        if(strlen(val)==4 && (val[0]>='a' && val[0]<='d') && val[1]=='_' && val[2]=='t' && val[3]>='1' && val[3]<='4') {
+        if(strlen(val)==4 && (val[0]>='a' && val[0]<='d') && val[1]=='_' && val[2]=='t' && val[3]>='1' && val[3]<='8') {
             t->gesture_scene=val[0]-'a'; t->gesture_clip=val[3]-'1'; t->gesture_saved=0;
         }
         return;
@@ -213,7 +232,7 @@ void twain_set_param(twain_t *t, const char *key, const char *val) {
     if ((key[0] >= 'a' && key[0] <= 'd') && key[1] == '_') {
         scene = key[0]-'a'; key += 2;
     }
-    if (key[0] == 't' && key[1] >= '1' && key[1] <= '4' && key[2] == '_') {
+    if (key[0] == 't' && key[1] >= '1' && key[1] <= '8' && key[2] == '_') {
         int layer = key[1] - '1';
         if(!strcmp(key+3,"clear")) {
             if(strcmp(val,"1") && strcmp(val,"trigger"))return;
@@ -284,10 +303,17 @@ int twain_get_param(twain_t *t, const char *key, char *buf, int n) {
     tw_io_poll(t);
     int project=tw_io_get(t,key,buf,n);if(project>=0)return project;
     if (!strcmp(key, "twain_status")) {
-        char state[TW_SCENES][192]; int custom[TW_SCENES]={0},muted[TW_SCENES]={0};
+        char state[TW_SCENES][256],armed[192];int ap=0;
+        armed[ap++]='[';
+        for(int s=0;s<4;s++) {
+            if(s)armed[ap++]=',';armed[ap++]='[';
+            for(int i=0;i<MARK_TRACKS;i++)ap+=snprintf(armed+ap,sizeof armed-ap,"%s%d",i?",":"",t->armed[s][i]);
+            armed[ap++]=']';
+        }
+        armed[ap++]=']';armed[ap]=0; int custom[TW_SCENES]={0},muted[TW_SCENES]={0};
         for(int scene=0;scene<TW_SCENES;scene++) {
             mark_get_param(t->scene[scene],"status",state[scene],sizeof state[scene]);
-            for(int clip=0;clip<4;clip++) {
+            for(int clip=0;clip<MARK_TRACKS;clip++) {
                 if(mark_clip_custom(t->scene[scene],clip))custom[scene]|=1<<clip;
                 char k[20],v[8];snprintf(k,sizeof k,"t%d_mute",clip+1);
                 mark_get_param(t->scene[scene],k,v,sizeof v);
@@ -299,15 +325,13 @@ int twain_get_param(twain_t *t, const char *key, char *buf, int n) {
             "{\"scene\":%d,\"pending\":%d,\"bars\":[%d,%d,%d,%d],\"phase\":%.4f,\"stopped\":%d,"
             "\"custom\":[%d,%d,%d,%d],\"muted\":[%d,%d,%d,%d],\"master\":%d,\"master_mute\":%d,\"undo\":%d,"
             "\"a\":\"%s\",\"b\":\"%s\",\"c\":\"%s\",\"d\":\"%s\","
-            "\"armed\":[[%d,%d,%d,%d],[%d,%d,%d,%d],[%d,%d,%d,%d],[%d,%d,%d,%d]]}",
+            "\"armed\":%s,\"input\":%.4f,\"clip\":%d,\"monitor\":%d,\"monitor_wanted\":%d,\"monitor_blocked\":%d}",
             t->active,t->pending,t->bars[0],t->bars[1],t->bars[2],t->bars[3],phase,t->transport_stopped,
             custom[0],custom[1],custom[2],custom[3],muted[0],muted[1],muted[2],muted[3],
-            t->master_level,t->master_mute,t->history_count,state[0],state[1],state[2],state[3],
-            t->armed[0][0],t->armed[0][1],t->armed[0][2],t->armed[0][3],
-            t->armed[1][0],t->armed[1][1],t->armed[1][2],t->armed[1][3],
-            t->armed[2][0],t->armed[2][1],t->armed[2][2],t->armed[2][3],
-            t->armed[3][0],t->armed[3][1],t->armed[3][2],t->armed[3][3]);
+            t->master_level,t->master_mute,t->history_count,state[0],state[1],state[2],state[3],armed,
+            t->input_peak,t->input_clip>0,t->input_monitor&&t->monitor_safe,t->input_monitor,t->input_monitor&&!t->monitor_safe);
     }
+    if(!strcmp(key,"input_monitor"))return snprintf(buf,n,"%d",t->input_monitor);
     if(!strcmp(key,"master_level"))return snprintf(buf,n,"%d",t->master_level);
     if(!strcmp(key,"master_mute"))return snprintf(buf,n,"%d",t->master_mute);
     if(!strcmp(key,"undo_count"))return snprintf(buf,n,"%d",t->history_count);
