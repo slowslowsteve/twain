@@ -138,6 +138,16 @@ static void test_clip_workflow(void) {
     }
     twain_set_param(t,"a_t1_clear","1"); expect(t,"tstates","0,0,0,0");
     twain_destroy(t);
+    t=twain_create(NULL,NULL); assert(t);
+    twain_set_param(t,"a_t1_record","1");
+    uint8_t start=0xfa,tick=0xf8;
+    twain_on_midi(t,&start,1,3);render(t,1);
+    expect(t,"tstates","1,0,0,0");
+    for(int i=0;i<95;i++){twain_on_midi(t,&tick,1,3);render(t,1);}
+    expect(t,"tstates","1,0,0,0");
+    twain_on_midi(t,&tick,1,3);render(t,1);
+    expect(t,"tstates","2,0,0,0"); // closes on received scene end despite tempo estimate
+    twain_destroy(t);
 }
 #ifdef MARK_TWAIN
 #include "../src/twain_fx.h"

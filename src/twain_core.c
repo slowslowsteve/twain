@@ -41,7 +41,10 @@ static void launch_armed(twain_t *t, int scene_start) {
         char key[24];
         mark_set_param(t->scene[scene], "quantize", "0");
         if(action==4) {
-            double length=mark_scene_bar_frames(t->scene[scene])*t->bars[scene];
+            /* Received clock boundaries, not the initial tempo estimate, close
+             * a clocked take. Capacity remains the hard recording limit. */
+            double length=t->clock_running ? MARK_SR*60.0 :
+                mark_scene_bar_frames(t->scene[scene])*t->bars[scene];
             if(length>MARK_SR*60.0)length=MARK_SR*60.0;
             mark_clip_record(t->scene[scene],i,(uint32_t)(length+0.5));
         } else {

@@ -1448,7 +1448,7 @@ void mark_scene_cycle(mark_t *m) {
     if (m->io_busy) return;
     for (int i = 0; i < MARK_TRACKS; i++) {
         mk_track_t *t = &m->t[i];
-        if (t->st == MK_REC && t->rec_len && !t->rec_target)
+        if (t->st == MK_REC && t->rec_len)
             finalize_record(m, i, t->rec_len, MK_PLAY);
         if (t->st == MK_DUB) {
             end_dub_capture(m, i);
