@@ -30,7 +30,7 @@ cp src/ui_twain.js build/modules/overtake/twain/ui.js
 # container produces clean archives.
 docker run --rm -v "$PWD":/w -w /w "$IMAGE" bash -c "
     set -e
-    aarch64-linux-gnu-gcc $CFLAGS -DMARK_TRACKS=4 -DMARK_REQUIRE_FULL_CAPACITY src/mark_core.c src/twain_core.c src/twain_gen.c \
+    aarch64-linux-gnu-gcc $CFLAGS -DMARK_TRACKS=4 -DMARK_REQUIRE_FULL_CAPACITY -DMARK_TWAIN src/mark_core.c src/twain_core.c src/twain_gen.c \
         -o build/modules/overtake/twain/dsp.so -lm -lpthread -ldl
     file build/modules/overtake/twain/dsp.so
     aarch64-linux-gnu-readelf -h build/modules/overtake/twain/dsp.so | grep -q AArch64

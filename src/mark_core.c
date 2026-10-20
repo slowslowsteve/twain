@@ -149,7 +149,14 @@ static void bq_set(mk_bq_t *q, float freq, int highpass, float Q) {
     q->a2 = (1.0f - alpha) * inv;
 }
 
+#ifdef MARK_TWAIN
+#include "twain_fx.h"
+#endif
+
 typedef struct {
+#ifdef MARK_TWAIN
+    twain_fx_t clipfx;
+#endif
     int16_t *buf;          /* track_frames * 2, interleaved */
     uint32_t len;          /* current loop frames, 0 = empty */
     uint32_t full_len;     /* frames as finalized — trim can't exceed this */
@@ -947,6 +954,9 @@ mark_t *mark_create_in_dir(const host_api_v1_t *host, const char *module_dir) {
     m->master_g = 1.0f;
     m->monitor = 1;
     for (int i = 0; i < MARK_TRACKS; i++) {
+#ifdef MARK_TWAIN
+        m->t[i].clipfx.dirty = 1;
+#endif
         m->t[i].level = 100;
         m->t[i].pan = 50;
         m->t[i].g_cur = 1.0f;
@@ -1438,7 +1448,7 @@ void mark_scene_cycle(mark_t *m) {
     if (m->io_busy) return;
     for (int i = 0; i < MARK_TRACKS; i++) {
         mk_track_t *t = &m->t[i];
-        if (t->st == MK_REC && t->rec_len)
+        if (t->st == MK_REC && t->rec_len && !t->rec_target)
             finalize_record(m, i, t->rec_len, MK_PLAY);
         if (t->st == MK_DUB) {
             end_dub_capture(m, i);
@@ -1496,6 +1506,15 @@ static void track_clear(mark_t *m, int ti) {
 /* One button: if anything plays, stop everything (and cancel pendings);
  * otherwise start every non-empty track together from the top — or just
  * the first one in SINGLE mode. */
+/* Explicit clip recording replaces audio only when its queued launch fires. */
+void mark_clip_record(mark_t *m, int ti, uint32_t frames) {
+    if (!m || ti<0 || ti>=MARK_TRACKS || m->io_busy) return;
+    track_clear(m, ti);
+    apply_start_record(m, ti);
+    m->t[ti].rec_target = frames < m->track_frames ? frames : m->track_frames;
+    m->t[ti].rec_end = MK_PLAY;
+}
+
 static void all_button(mark_t *m) {
     if (m->io_busy) return;
     if (base_playing(m)) {
@@ -2126,6 +2145,9 @@ static void process_common(mark_t *m, const int16_t *in, int16_t *out,
     int use_ext[MARK_TRACKS] = {0};
     for (int i = 0; i < MARK_TRACKS; i++) {
         mk_track_t *t = &m->t[i];
+#ifdef MARK_TWAIN
+        twain_fx_prepare(&t->clipfx);
+#endif
         block_fx[i] = atomic_load_explicit(&m->fx_active[i], memory_order_acquire);
         use_ext[i] = t->fx_on && t->fx_module[0] && block_fx[i] &&
                      !strcmp(t->fx_module, block_fx[i]->id);
@@ -2139,6 +2161,9 @@ static void process_common(mark_t *m, const int16_t *in, int16_t *out,
         for (int i = 0; i < MARK_TRACKS; i++)
             memset(m->tmix[i], 0, (size_t)frames * sizeof(float));
 
+#ifdef MARK_TWAIN
+    float clip_bar=(float)frames_per_measure(m);
+#endif
     int paused = m->transport_paused;
     int use_measure_flag = m->measure_flag;
     m->measure_flag = 0;
@@ -2210,6 +2235,13 @@ static void process_common(mark_t *m, const int16_t *in, int16_t *out,
                         outr += r * t->g_cur * t->pg[1];
                     }
                 }
+#ifdef MARK_TWAIN
+                if (!paused) {
+                    float l=0, r=0;
+                    twain_fx_run(&t->clipfx,&l,&r,clip_bar);
+                    outl+=l*t->g_cur*t->pg[0]; outr+=r*t->g_cur*t->pg[1];
+                }
+#endif
                 continue;
             }
             if (m->swap_track == i)   /* undo swap in flight: track muted */
@@ -2236,6 +2268,9 @@ static void process_common(mark_t *m, const int16_t *in, int16_t *out,
                 }
             }
 
+#ifdef MARK_TWAIN
+            twain_fx_run(&t->clipfx,&l,&r,clip_bar);
+#endif
             if (use_ext[i]) {
                 m->fx_block[i][n * 2] = clip16(l);
                 m->fx_block[i][n * 2 + 1] = clip16(r);
@@ -2357,8 +2392,13 @@ void mark_set_param(mark_t *m, const char *key, const char *val) {
     /* per-track keys: t<1-5>_... */
     if (key[0] == 't' && key[1] >= '1' && key[1] <= '5' && key[2] == '_') {
         int ti = key[1] - '1';
+        if (ti >= MARK_TRACKS) return;
         const char *k = key + 3;
         mk_track_t *t = &m->t[ti];
+#ifdef MARK_TWAIN
+        int fx_index=twain_fx_index(k);
+        if(fx_index>=0) { t->clipfx.value[fx_index]=clampi(atoi(val),0,100); t->clipfx.dirty=1; m->edit_rev++; return; }
+#endif
         if (!strcmp(k, "btn"))   { if (trig_active(val)) track_button(m, ti); return; }
         if (!strcmp(k, "stop"))  { if (trig_active(val)) track_stop(m, ti);   return; }
         if (!strcmp(k, "clear")) { if (trig_active(val)) track_clear(m, ti);  return; }
@@ -2562,8 +2602,13 @@ int mark_get_param(mark_t *m, const char *key, char *buf, int buf_len) {
 
     if (key[0] == 't' && key[1] >= '1' && key[1] <= '5' && key[2] == '_') {
         int ti = key[1] - '1';
+        if (ti >= MARK_TRACKS) return -1;
         const char *k = key + 3;
         const mk_track_t *t = &m->t[ti];
+#ifdef MARK_TWAIN
+        int fx_index=twain_fx_index(k);
+        if(fx_index>=0)return snprintf(buf,(size_t)buf_len,"%d",t->clipfx.value[fx_index]);
+#endif
         if (!strcmp(k, "level")) return snprintf(buf, (size_t)buf_len, "%d", t->level);
         if (!strcmp(k, "pan"))   return snprintf(buf, (size_t)buf_len, "%d", t->pan);
         if (!strcmp(k, "rev"))   return snprintf(buf, (size_t)buf_len, "%d", t->rev);

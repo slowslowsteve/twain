@@ -2,14 +2,16 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <math.h>
 static void expect(twain_t *t, const char *key, const char *want) {
     char buf[256]; twain_get_param(t, key, buf, sizeof buf);
     assert(!strcmp(buf, want));
 }
-static int signal = 1000;
+static int test_signal = 1000;
 static void render(twain_t *t, int blocks) {
     int16_t in[256], out[256];
-    for (int i=0;i<256;i++) in[i]=signal;
+    for (int i=0;i<256;i++) in[i]=test_signal;
     while (blocks--) twain_process(t,in,out,128);
 }
 static void select_scene(twain_t *t, int scene) {
@@ -114,13 +116,65 @@ static void test_armed_record(void) {
     expect(t,"tstates","1,0,0,0");
     twain_destroy(t);
 }
+static void test_clip_workflow(void) {
+    twain_t *t=twain_create(NULL,NULL); assert(t);
+    twain_set_param(t,"a_t1_clip","1"); expect(t,"tstates","0,0,0,0");
+    frames(t,128);
+    twain_set_param(t,"a_t1_record","1");
+    frames(t,88200-128); expect(t,"tstates","1,0,0,0");
+    frames(t,88200); expect(t,"tstates","2,0,0,0");
+    frames(t,128); twain_set_param(t,"a_t1_clip","1");
+    frames(t,88200-129); expect(t,"tstates","2,0,0,0");
+    frames(t,1); expect(t,"tstates","4,0,0,0"); // quantized stop
+    twain_set_param(t,"a_t1_clip","1"); frames(t,88200);
+    expect(t,"tstates","2,0,0,0"); // start, never overdub
+    twain_set_param(t,"a_t1_clip","1");twain_set_param(t,"a_t1_clip","1");
+    frames(t,88200); expect(t,"tstates","2,0,0,0"); // cancel pending stop
+    const char *fx[]={"hp","lp","comp","sat","chorus","reverb","delay"};
+    for(int i=0;i<7;i++) {
+        char k[40];snprintf(k,sizeof k,"a_t1_%s",fx[i]);
+        twain_set_param(t,k,"73"); expect(t,k,"73");
+        snprintf(k,sizeof k,"b_t1_%s",fx[i]); expect(t,k,"0");
+    }
+    twain_set_param(t,"a_t1_clear","1"); expect(t,"tstates","0,0,0,0");
+    twain_destroy(t);
+}
+#ifdef MARK_TWAIN
+#include "../src/twain_fx.h"
+static void test_clip_fx(void) {
+    assert(twain_fx_index("reverb")==5 && twain_fx_index("invalid")==-1);
+    for(int effect=0;effect<7;effect++) {
+        twain_fx_t *f=calloc(1,sizeof(*f)); assert(f);
+        f->value[effect]=100; f->dirty=1; twain_fx_prepare(f);
+        double before=0,after=0,difference=0,tail=0;
+        for(int n=0;n<44100;n++) {
+            float input=effect>=5 ? (n==0?12000.0f:0.0f) : 8000.0f*sinf(6.2831853f*1000*n/MARK_SR);
+            float l=input,r=input;twain_fx_run(f,&l,&r,88200);
+            assert(isfinite(l) && isfinite(r) && fabsf(l)<=32768 && fabsf(r)<=32768);
+            if(n>22050) { before+=input*input;after+=l*l;difference+=(l-input)*(l-input); }
+            if(n>100)tail+=fabsf(l)+fabsf(r);
+        }
+        if(effect<3)assert(after<before*0.3);
+        if(effect==3)assert(after>before*0.8 && after<before*1.05);
+        if(effect==4)assert(difference>before*0.01);
+        if(effect>=5)assert(tail>100);
+        free(f);
+    }
+    twain_fx_t *f=calloc(1,sizeof(*f)); assert(f); f->dirty=1;twain_fx_prepare(f);
+    float l=2345,r=-2345;twain_fx_run(f,&l,&r,88200);assert(l==2345 && r==-2345);free(f);
+}
+#endif
 int main(void) {
     test_scene_grid();
+    test_clip_workflow();
+#ifdef MARK_TWAIN
+    test_clip_fx();
+#endif
     test_armed_record();
     twain_t *t=twain_create(NULL,NULL); assert(t);
     expect(t,"module_id","twain"); expect(t,"track_seconds","60");
     for (int scene=0;scene<2;scene++) {
-        signal = scene ? 2000 : 1000;
+        test_signal = scene ? 2000 : 1000;
         select_scene(t,scene);
         expect(t,"tstates","0,0,0,0");
         twain_set_param(t,"quantize","0");

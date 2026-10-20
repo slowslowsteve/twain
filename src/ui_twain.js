@@ -1,126 +1,137 @@
-/* Twain: left/right four pad columns are scenes A/B. Rows: cycle,
- * stop, undo, clear. Track buttons and transport remain with Move. */
-import { setLED, decodeDelta } from '/data/UserData/schwung/shared/input_filter.mjs';
-import { MoveKnob1, MoveLeft, MoveRight, MoveLoop, Black, BrightRed, Green, White, LightGrey, YellowGreen } from '/data/UserData/schwung/shared/constants.mjs';
+/* Two vertical clip columns: A at column 1, B at column 2. */
+import { setLED, setButtonLED, decodeDelta } from '/data/UserData/schwung/shared/input_filter.mjs';
+import { MoveKnob1, MoveMaster, MoveRec, MoveDelete, MoveLeft, MoveRight, MoveLoop,
+    Black, BrightRed, Green, White, LightGrey } from '/data/UserData/schwung/shared/constants.mjs';
 import { announce } from '/data/UserData/schwung/shared/screen_reader.mjs';
-/* The host installs the overtake bridge before evaluating this module.
- * Pin it: a callback entered from the track editor may temporarily restore
- * the chain editor's global bridge, which addresses a different DSP. */
-const dspGet = host_module_get_param;
-const dspSet = host_module_set_param;
-let scene = 0;
-let ticks = 0;
-let loopView = false;
-let lengthScene = 0;
-let snapshot = null;
-let forcePaints = 3;
-const BLUE = 33, PURPLE = 22, CYAN = 16, AMBER = 8;
-function select(s) {
-    dspSet('scene', String(s));
+const dspGet=host_module_get_param, dspSet=host_module_set_param;
+const FX=['hp','lp','comp','sat','chorus','reverb','delay'];
+const FX_NAMES=['HP filter','LP filter','Compression','Saturation','Chorus','Reverb','Delay'];
+let snapshot=null, held=null, rec=false, del=false, loop=false, editScene=0;
+let ticks=0, lastForce=-10000, overlay='', overlayUntil=0;
+function claimVolume(on) {
+    if(typeof shadow_set_overtake_suppress_master_volume==='function')
+        shadow_set_overtake_suppress_master_volume(on?1:0);
+}
+function prefix(s) { return s ? 'b_' : 'a_'; }
+function key(clip,name) { return `${prefix(clip.scene)}t${clip.track+1}_${name}`; }
+function clipAt(note) {
+    if(note<68 || note>99 || (note-68)%8>1)return null;
+    return {scene:(note-68)%8,track:3-Math.floor((note-68)/8),note,used:false,values:{}};
 }
 function poll() {
-    const raw = dspGet('twain_status');
-    if (!raw) return;
+    const raw=dspGet('twain_status');
+    if(!raw)return;
     try {
-        const next = JSON.parse(raw);
-        if (!Array.isArray(next.bars) || typeof next.a !== 'string' || typeof next.b !== 'string') return;
-        snapshot = next;
-        scene = next.scene;
-    } catch (_) { /* Preserve the last valid snapshot on a busy param channel. */ }
+        const next=JSON.parse(raw);
+        if(Array.isArray(next.bars) && typeof next.a==='string' && typeof next.b==='string')snapshot=next;
+    } catch (_) {}
 }
 function paint() {
+    const now=Date.now(), blink=Math.floor(now/250)%2===0;
+    const force=now-lastForce>=1000;
+    if(force)lastForce=now;
+    setButtonLED(MoveLoop,loop?124:16,force);
+    setButtonLED(MoveRec,rec?BrightRed:65,force);
+    setButtonLED(MoveDelete,del?124:16,force);
     clear_screen();
-    if (!snapshot) { print(2, 2, 'TWAIN connecting...', 1); return; }
-    const editScene = loopView ? lengthScene : scene;
-    const bars = snapshot.bars[editScene];
-    const phase = Math.min(snapshot.phase, snapshot.bars[scene] - 0.0001);
-    const bar = Math.floor(phase) + 1;
-    const beat = Math.floor((phase % 1) * 4) + 1;
-    const blink = Math.floor(Date.now() / 250) % 2 === 0;
-    const force = forcePaints > 0;
-    if (force) forcePaints--;
-    print(2, 2, loopView ? `Scene ${editScene ? 'B' : 'A'}: ${bars} bars`
-          : `TWAIN ${scene ? 'B' : 'A'} Bar ${bar}/${snapshot.bars[scene]}`, 1);
-    print(2, 14, loopView ? 'Press step 1-16' : snapshot.stopped ? 'Stopped - press Play'
-          : snapshot.pending >= 0 ? `Next: ${snapshot.pending ? 'B' : 'A'} at end`
-          : snapshot.armed[scene].some(value => value === 1) ? `REC in ${5 - beat} beats` : `Beat ${beat} of 4`, 1);
-    const scenes = [snapshot.a, snapshot.b].map(value => value.split('|').map(part => part.split(',').map(Number)));
-    const states = scenes[editScene][0];
-    for (let i = 0; i < 4; i++) {
-        const armed = snapshot.armed[editScene][i];
-        print(2 + i * 31, 29, `L${i + 1}`, 1);
-        print(2 + i * 31, 39, armed ? 'WAIT' : ['-','REC','PLAY','DUB','STOP'][states[i]] || '-', 1);
+    if(!snapshot) { print(2,2,'TWAIN connecting...',1); return; }
+    const s=loop?editScene:snapshot.scene, bars=snapshot.bars[s];
+    const phase=Math.max(0,Math.min(snapshot.phase,snapshot.bars[snapshot.scene]-0.0001));
+    const bar=Math.floor(phase)+1, beat=Math.floor((phase%1)*4)+1;
+    print(2,2,loop?`Set ${s?'B':'A'}: ${bars} bars`:`${snapshot.scene?'B':'A'} Bar ${bar}/${snapshot.bars[snapshot.scene]}`,1);
+    print(2,14,`A:${snapshot.bars[0]} bars B:${snapshot.bars[1]} bars`,1);
+    if(now<overlayUntil) print(2,29,overlay,1);
+    else if(loop) print(2,29,'Steps:1-16 Arrows:A/B',1);
+    else if(snapshot.stopped) print(2,29,'Stopped: press Play',1);
+    else if(snapshot.pending>=0) print(2,29,`Next ${snapshot.pending?'B':'A'} at end`,1);
+    else print(2,29,`Beat ${beat}/4`,1);
+    print(2,42,rec?'REC + clip: record':del?'DELETE + clip: clear':held?`Hold ${held.scene?'B':'A'}${held.track+1}: Vol / FX`:'Tap clip: play / stop',1);
+    print(2,54,loop?'Release Loop to play':'Hold Loop: bars',1);
+    for(let i=0;i<16;i++) {
+        const current=snapshot.bars[snapshot.scene]===1?Math.floor((phase%1)*16):bar-1;
+        const color=loop?(i===bars-1?White:i<bars?16:LightGrey)
+            :i===current?White:i<snapshot.bars[snapshot.scene] || snapshot.bars[snapshot.scene]===1?33:Black;
+        setLED(16+i,color,force);
     }
-    print(2, 53, loopView ? 'Arrows:A/B Loop:exit' : 'Loop: set 1-16 bars', 1);
-    for (let i = 0; i < 16; i++) {
-        let color = Black;
-        if (loopView) color = i === bars - 1 ? White : i < bars ? CYAN : LightGrey;
-        else if (snapshot.bars[scene] === 1) {
-            const step = Math.min(15, Math.floor((phase % 1) * 16));
-            color = i === step ? White : (i % 4 === 0 ? BLUE : LightGrey);
-        } else {
-            color = i === bar - 1 ? White : i < snapshot.bars[scene] ? BLUE : Black;
+    const scenes=[snapshot.a,snapshot.b].map(v=>v.split('|').map(p=>p.split(',').map(Number)));
+    for(let row=0;row<4;row++)for(let col=0;col<8;col++) {
+        let color=Black;
+        if(col<2) {
+            const state=scenes[col][0][row], armed=snapshot.armed[col][row];
+            color=[col?22:33,BrightRed,Green,Green,8][state] || (col?22:33);
+            if(armed)color=blink?(armed===1||armed===4?BrightRed:armed===3?8:Green):Black;
+            else if(snapshot.pending===col && !blink)color=Black;
+            if(loop && col===editScene)color=White;
+            if(held && held.scene===col && held.track===row)color=White;
         }
-        setLED(16 + i, color, force);
-    }
-    for (let s = 0; s < 2; s++) for (let i = 0; i < 4; i++) {
-        const state = scenes[s][0][i];
-        const armed = snapshot.armed[s][i] || scenes[s][1][i];
-        const sceneColor = s ? PURPLE : BLUE;
-        const queued = snapshot.pending === s;
-        let top = [sceneColor, BrightRed, Green, YellowGreen, AMBER][state] || sceneColor;
-        if (armed) top = blink ? (armed === 1 ? BrightRed : Green) : Black;
-        else if (queued && !blink) top = Black;
-        setLED(92 + s * 4 + i, top, force);
-        setLED(84 + s * 4 + i, state === 4 ? AMBER : 79, force); // pause, dim amber
-        setLED(76 + s * 4 + i, scenes[s][3][0] ? PURPLE : 104, force); // undo
-        setLED(68 + s * 4 + i, state || armed ? 65 : 66, force); // delete, dim red
+        setLED(92-row*8+col,color,force);
     }
 }
 function refresh() { poll(); paint(); }
-globalThis.init = refresh;
-globalThis.onResume = function() { forcePaints = 3; refresh(); };
-globalThis.tick = function() {
-    if (++ticks % 2 === 0) poll();
-    paint();
-};
-globalThis.onMidiMessageInternal = function(data) {
-    const status = data[0] & 0xf0, note = data[1], value = data[2];
-    if (status === 0xb0 && note === MoveLoop) {
-        if (value > 0) {
-            loopView = !loopView;
-            if (loopView) lengthScene = scene;
-            refresh();
+function notice(text) { overlay=text; overlayUntil=Date.now()+1800; announce(text); }
+function adjust(controller,value) {
+    if(!held)return;
+    const delta=decodeDelta(value);
+    if(!delta)return;
+    held.used=true;
+    const param=controller===MoveMaster?'level':FX[controller-MoveKnob1];
+    if(!param)return;
+    const k=key(held,param), max=param==='level'?200:100;
+    if(held.values[param]===undefined) {
+        const raw=dspGet(k);
+        if(raw===null || raw===undefined || raw==='')return;
+        held.values[param]=Number(raw);
+    }
+    const next=Math.max(0,Math.min(max,held.values[param]+delta));
+    held.values[param]=next; dspSet(k,String(next));
+    const label=param==='level'?'Volume':FX_NAMES[controller-MoveKnob1];
+    notice(`${held.scene?'B':'A'}${held.track+1} ${label}: ${next}`);
+}
+globalThis.init=refresh;
+globalThis.onResume=function() { held=null; claimVolume(false); rec=del=loop=false; lastForce=-10000; refresh(); };
+globalThis.tick=function() { if(++ticks%2===0)poll(); paint(); };
+globalThis.onMidiMessageInternal=function(data) {
+    const type=data[0]&0xf0, note=data[1], value=data[2];
+    if(type===0xb0) {
+        if(note===MoveLoop) { loop=value>0; if(loop)editScene=snapshot?snapshot.scene:0; paint(); return; }
+        if(note===MoveRec) { rec=value>0; if(held)held.used=true; paint(); return; }
+        if(note===MoveDelete) { del=value>0; if(held)held.used=true; paint(); return; }
+        if((note===MoveLeft || note===MoveRight) && value>0) {
+            const target=note===MoveRight?1:0;
+            if(loop)editScene=target;
+            else dspSet('scene',String(target));
+            refresh(); return;
         }
-        return;
+        if(note===MoveMaster) {
+            if(held) {
+                held.used=true;
+                if(typeof shadow_set_overtake_suppress_master_volume==='function')adjust(note,value);
+                else notice('Host: no clip Volume');
+            }
+            paint(); return;
+        }
+        if(note>=MoveKnob1 && note<MoveKnob1+7) { adjust(note,value); paint(); return; }
     }
-    if (loopView && status === 0x90 && value > 0 && note >= 16 && note <= 31) {
-        dspSet(`${lengthScene ? 'b' : 'a'}_scene_bars`, String(note - 15));
-        announce(`Scene ${lengthScene ? 'B' : 'A'}, ${note - 15} bars`);
-        refresh();
-        return;
+    if(type===0x90 && value>0) {
+        if(loop && note>=16 && note<=31) {
+            dspSet(prefix(editScene)+'scene_bars',String(note-15)); refresh(); return;
+        }
+        const clip=clipAt(note); if(!clip)return;
+        if(loop) { editScene=clip.scene; paint(); return; }
+        if(held)held.used=true;
+        held=clip; claimVolume(true);
+        if(del || rec) {
+            held.used=true;
+            dspSet(key(clip,del?'clear':'record'),'1');
+            notice(del?`${clip.scene?'B':'A'}${clip.track+1} cleared`:`${clip.scene?'B':'A'}${clip.track+1} REC next cycle`);
+        }
+        refresh(); return;
     }
-    if (status === 0xb0 && value > 0 && (note === MoveLeft || note === MoveRight)) {
-        if (loopView) lengthScene = note === MoveLeft ? 0 : 1;
-        else select(note === MoveLeft ? 0 : 1);
-        announce(`Scene ${scene ? 'B' : 'A'}`);
-        refresh();
-    } else if (status === 0x90 && value > 0 && note >= 68 && note <= 99) {
-        const col = (note - 68) % 8, row = 3 - Math.floor((note - 68) / 8);
-        if (loopView) { lengthScene = col < 4 ? 0 : 1; refresh(); return; }
-        select(col < 4 ? 0 : 1);
-        const layer = col % 4 + 1;
-        const prefix = col < 4 ? 'a_' : 'b_';
-        if (row === 2) dspSet(prefix + 'undo', '1');
-        else dspSet(`${prefix}t${layer}_${['launch','stop','undo','clear'][row]}`, '1');
-        announce(`Scene ${scene ? 'B' : 'A'}, layer ${layer}`);
-        refresh();
-    } else if (status === 0xb0 && note >= MoveKnob1 && note < MoveKnob1 + 8) {
-        const col = note - MoveKnob1;
-        select(col < 4 ? 0 : 1);
-        const key = `${col < 4 ? 'a' : 'b'}_t${col % 4 + 1}_level`;
-        const level = Number(dspGet(key)) || 0;
-        dspSet(key, String(Math.max(0, Math.min(200, level + decodeDelta(value)))));
+    if(type===0x80 || (type===0x90 && value===0)) {
+        if(held && held.note===note) {
+            if(!held.used)dspSet(key(held,'clip'),'1');
+            held=null; claimVolume(false); refresh();
+        }
     }
 };
-globalThis.onUnload = function() {};
+globalThis.onUnload=function() { claimVolume(false); };

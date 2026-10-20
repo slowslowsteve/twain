@@ -1,96 +1,55 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-const writes = [];
-let scene = '0';
-let pending = '-1';
-const text = [];
-const params = new Map([['a_scene_bars','1'],['b_scene_bars','1']]);
-const leds = new Map();
-let now = 0, reads = 0, failReads = false;
-let phase = 0;
-const armed = [[0,0,0,0],[0,0,0,0]];
-class FakeDate extends Date { static now() { return now; } }
-function status() { return JSON.stringify({scene:Number(scene),pending:Number(pending),
-    bars:[Number(params.get('a_scene_bars')),Number(params.get('b_scene_bars'))],phase,stopped:0,
-    a:'0,1,2,3|0,0,0,0|0,0,0,0|1|0',b:'4,0,2,0|0,0,0,0|0,0,0,0|0|0',armed}); }
-
-const context = vm.createContext({Date:FakeDate,
-    host_module_set_param(k,v) { writes.push([k,v]); params.set(k,v); if(k==='scene') pending=v===scene ? '-1' : v; },
-    host_module_get_param(k) { reads++; if(failReads) return null; if(k==='twain_status') return status(); return k==='scene' ? scene : k==='scene_pending' ? pending : k==='tstates' ? '0,1,2,3' : params.get(k) || '100'; },
-    clear_screen(){}, print(x,y,s){text.push(s);}
+let now=0,reads=0,failed=false;
+const claims=[];
+const writes=[],leds=new Map(),buttons=new Map(),text=[];
+const params=new Map();
+const state={scene:0,pending:-1,bars:[1,4],phase:0,stopped:0,
+ a:'0,1,2,4|0,0,0,0|0,0,0,0|0|0',b:'4,0,2,0|0,0,0,0|0,0,0,0|0|0',armed:[[0,0,0,0],[0,0,0,0]]};
+const constants={MoveKnob1:71,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,
+ MoveLoop:58,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
+class FakeDate extends Date {static now(){return now;}}
+const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_master_volume:v=>claims.push(v),
+ host_module_set_param(k,v){writes.push([k,v]);params.set(k,v);if(k==='scene')state.pending=Number(v)===state.scene?-1:Number(v);if(k.endsWith('scene_bars'))state.bars[k[0]==='b'?1:0]=Number(v);},
+ host_module_get_param(k){reads++; if(failed)return null;return k==='twain_status'?JSON.stringify(state):params.get(k)??'0';},
+ clear_screen(){},print(x,y,s){text.push(s);}
 });
-const module = new vm.SourceTextModule(fs.readFileSync('src/ui_twain.js','utf8'),{context});
-await module.link(async spec => {
-    const vals = spec.includes('constants') ? {MoveLoop:58,Black:0,MoveKnob1:71,MoveLeft:62,MoveRight:63,BrightRed:1,Green:2,White:3,LightGrey:4,YellowGreen:5} : spec.includes('input_filter') ? {setLED:(n,c)=>leds.set(n,c),decodeDelta:v=>v<64?v:v-128} : {announce(){}};
-    const stub = new vm.SyntheticModule(Object.keys(vals),function(){for(const [k,v] of Object.entries(vals))this.setExport(k,v);},{context});
-    return stub;
+const module=new vm.SourceTextModule(fs.readFileSync('src/ui_twain.js','utf8'),{context});
+await module.link(async spec=>{
+ const vals=spec.includes('constants')?constants:spec.includes('input_filter')?
+ {setLED:(n,c)=>leds.set(n,c),setButtonLED:(n,c)=>buttons.set(n,c),decodeDelta:v=>v<64?v:v-128}:{announce(){}};
+ return new vm.SyntheticModule(Object.keys(vals),function(){for(const[k,v]of Object.entries(vals))this.setExport(k,v);},{context});
 });
 await module.evaluate();
+const cc=(n,v=127)=>context.onMidiMessageInternal([0xb0,n,v]);
+const down=n=>context.onMidiMessageInternal([0x90,n,127]);
+const up=n=>context.onMidiMessageInternal([0x80,n,0]);
 context.init();
-context.onMidiMessageInternal([0xb0,63,127]);
-assert.equal(scene,'0');
-assert.equal(pending,'1');
-assert(text.includes('Next: B at end'));
-context.onMidiMessageInternal([0x90,99,127]);
-assert.deepEqual(writes.at(-1),['b_t4_launch','1']);
-context.onMidiMessageInternal([0x90,84,127]);
-assert.equal(scene,'0');
-assert.deepEqual(writes.at(-1),['a_t1_stop','1']);
-const count=writes.length;
-context.onMidiMessageInternal([0x90,84,0]);
-context.onMidiMessageInternal([0xb0,85,127]);
-assert.equal(writes.length,count);
-console.log('Twain UI: scene selection, layer mapping, release and native control isolation passed');
-
-context.onMidiMessageInternal([0xb0,58,127]);
-context.onMidiMessageInternal([0xb0,58,0]);
-context.onMidiMessageInternal([0x90,19,127]);
-assert.deepEqual(writes.at(-1),['a_scene_bars','4']);
-assert.equal(leds.get(19),3); assert.equal(leds.get(20),4);
-const before = writes.length;
-context.onMidiMessageInternal([0xb0,63,127]); // choose B length, no launch
-assert.equal(writes.length,before);
-context.onMidiMessageInternal([0x90,31,127]);
-assert.deepEqual(writes.at(-1),['b_scene_bars','16']);
-context.onMidiMessageInternal([0x90,16,127]);
-assert.deepEqual(writes.at(-1),['b_scene_bars','1']);
-context.onMidiMessageInternal([0xb0,58,127]);
-const after = writes.length;
-context.onMidiMessageInternal([0x90,20,127]);
-assert.equal(writes.length,after);
-console.log('Twain UI: Loop view, 1/4/16 bars, scene targeting, LEDs and release passed');
-
-params.set('a_scene_bars','1');
-context.onResume();
-assert.equal(leds.get(92),33); // A empty pads blue
-assert.equal(leds.get(97),22); // B empty pads purple, own state displayed
-assert.equal(leds.get(93),1); // recording red
-assert.equal(leds.get(94),2); // playing green
-assert.equal(leds.get(84),79); // pause distinct from undo/delete
-assert.equal(leds.get(76),22);
-assert.equal(leds.get(68),66);
-assert.equal(leds.get(16),3); // one-bar chase starts at step 1
-phase=0.5; context.onResume();
-assert.equal(leds.get(24),3); // step 9 halfway through one bar
-armed[0][0]=1; context.onResume(); assert.equal(leds.get(92),1);
-now=250; context.tick(); assert.equal(leds.get(92),0); // armed red blink
-const r=reads;
-for(let i=0;i<12;i++) context.tick();
-assert.equal(reads-r,6); // one DSP read every two ticks
-failReads=true; context.onResume();
-assert(text.includes('TWAIN A Bar 1/1')); // retains valid state on timeout
-failReads=false; params.set('a_scene_bars','4'); phase=2.3; context.onResume();
-assert(text.includes('TWAIN A Bar 3/4'));
-assert.equal(leds.get(18),3);
-console.log('Twain UI: scene colors, pending blink, bar chase and bounded polling passed');
-
-const realGet=context.host_module_get_param, realSet=context.host_module_set_param;
-context.host_module_get_param=()=>null;
-context.host_module_set_param=()=>{throw new Error('wrong track-editor DSP');};
-context.onResume();
-assert.equal(leds.get(18),3); // retains its own DSP snapshot through host swaps
-context.onMidiMessageInternal([0x90,99,127]);
-assert.deepEqual(writes.at(-1),['b_t4_launch','1']);
-context.host_module_get_param=realGet; context.host_module_set_param=realSet;
-console.log('Twain UI: Tools launch retains overtake bridge across track-editor callback swaps');
+assert.equal(leds.get(92),33);assert.equal(leds.get(85),22); // A1/B2 columns
+assert.equal(leds.get(94),0);assert.equal(leds.get(99),0); // unused pads dark
+assert.equal(buttons.get(58),16);
+down(92);assert.equal(writes.length,0);up(92);assert.deepEqual(writes.at(-1),['a_t1_clip','1']);
+cc(86);down(85);up(85);cc(86,0);assert.deepEqual(writes.at(-1),['b_t2_record','1']);
+cc(119);down(76);up(76);cc(119,0);assert.deepEqual(writes.at(-1),['a_t3_clear','1']);
+cc(58);assert.equal(buttons.get(58),124);down(19);up(19);assert.deepEqual(writes.at(-1),['a_scene_bars','4']);
+cc(63);down(31);up(31);assert.deepEqual(writes.at(-1),['b_scene_bars','16']);
+cc(58,0);assert.equal(buttons.get(58),16);assert(text.includes('A Bar 1/4'));
+const before=writes.length;cc(71,5);assert.equal(writes.length,before); // no clip, no arbitrary scene/FX changes
+params.set('a_t1_level','100');down(92);cc(79,5);up(92);assert.deepEqual(writes.at(-1),['a_t1_level','105']);
+assert(!writes.slice(before).some(([k])=>k==='scene'||k.endsWith('_clip')));
+const fx=['hp','lp','comp','sat','chorus','reverb','delay'];
+for(let i=0;i<7;i++){down(93);cc(71+i,7);up(93);assert.deepEqual(writes.at(-1),[`b_t1_${fx[i]}`,'7']);}
+const beforeMaster=writes.length;cc(79,2);assert.equal(writes.length,beforeMaster);
+assert(claims.includes(1));assert.equal(claims.at(-1),0);
+cc(63);assert.equal(state.pending,1);cc(63);assert.equal(state.pending,1);cc(62);assert.equal(state.pending,-1);
+state.armed[0][0]=4;context.onResume();assert.equal(leds.get(92),1);now=250;context.tick();assert.equal(leds.get(92),0);
+state.phase=2.2;context.onResume();assert(text.includes('A Bar 3/4'));assert.equal(leds.get(18),120);
+const r=reads;for(let i=0;i<12;i++)context.tick();assert.equal(reads-r,6);
+failed=true;context.onResume();assert(text.includes('A Bar 3/4'));failed=false;
+// The host may replace these globals with the track editor's bridge during callbacks.
+context.host_module_get_param=()=>null;context.host_module_set_param=()=>{throw Error('wrong DSP');};
+down(84);up(84);assert.deepEqual(writes.at(-1),['a_t2_clip','1']);
+// A later native LED repaint must be repaired periodically, not only at resume.
+leds.set(84,0);now+=1200;context.tick();assert.notEqual(leds.get(84),0);
+console.log('Twain UI: clip gestures, seven FX, hold Loop, volume, consistent scenes and LED repair passed');

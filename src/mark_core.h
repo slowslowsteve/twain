@@ -135,6 +135,7 @@ void mark_process_multi(mark_t *m, const int16_t *const *in_ch,
 /* Twain transport helpers; no effect on Mark's normal render path. */
 double mark_scene_bar_frames(const mark_t *m);
 void mark_scene_cycle(mark_t *m);
+void mark_clip_record(mark_t *m, int track, uint32_t frames);
 
 void mark_on_midi(mark_t *m, const uint8_t *msg, int len, int source);
 void mark_set_param(mark_t *m, const char *key, const char *val);
