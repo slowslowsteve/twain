@@ -15,7 +15,7 @@ typedef struct {
     unsigned live_gen, job_gen;
     char target[37], source[37], job_name[128];
     unsigned long long revision, saved_revision, job_revision;
-    int active, bars[4], master, mute, file_layers;
+    int active, bars[4], starts[4], master, mute, input_level, monitor_level, file_layers, file_version;
     mark_clip_snapshot_t clips[4][MARK_TRACKS];
     mark_t *staged[4];
     tw_project_entry catalog[TW_CATALOG]; int catalog_count;

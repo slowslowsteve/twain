@@ -5,17 +5,17 @@ let now=0,reads=0,failed=false;
 const claims=[],rects=[];
 const writes=[],leds=new Map(),buttons=new Map(),text=[];
 const params=new Map(),critical=[];let failCritical=false;
-const state={scene:0,pending:-1,bars:[1,4,2,8],phase:0,stopped:0,custom:[0,0,0,0],muted:[0,0,0,0],master:100,master_mute:0,undo:0,
+const state={scene:0,pending:-1,bars:[1,4,2,8],phase:0,stopped:0,custom:[0,0,0,0],muted:[0,0,0,0],starts:[0,0,0,0],master:100,master_mute:0,undo:0,
  a:'0,1,2,4|0,0,0,0|0,0,0,0|0|0',b:'4,0,2,0|0,0,0,0|0,0,0,0|0|0',c:'0,0,0,0|0,0,0,0',d:'0,0,0,0|0,0,0,0',armed:Array.from({length:4},()=>[0,0,0,0])};
 const constants={MoveKnob1:71,MovePlay:85,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,
  MoveLoop:58,MoveUndo:56,MoveMainKnob:14,MoveMainButton:3,MoveUp:55,MoveDown:54,MoveShift:49,MoveMute:88,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
 class FakeDate extends Date {static now(){return now;}}
 const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_master_volume:v=>claims.push(v),
- host_module_set_param(k,v){writes.push([k,v]);params.set(k,v);if(k==='scene')state.pending=Number(v)===state.scene?-1:Number(v);if(k.endsWith('scene_bars'))state.bars['abcd'.indexOf(k[0])]=Number(v);},
+ host_module_set_param(k,v){writes.push([k,v]);params.set(k,v);if(k==='scene')state.pending=Number(v)===state.scene?-1:Number(v);if(k.endsWith('scene_range')){const [a,b]=v.split(',').map(Number),i='abcd'.indexOf(k[0]);state.starts[i]=a-1;state.bars[i]=b;}if(k.endsWith('scene_bars'))state.bars['abcd'.indexOf(k[0])]=Number(v);},
  host_module_set_param_blocking(k,v,timeout){
   assert.equal(timeout,100);critical.push([k,v]);
   if(failCritical){failCritical=false;return false;}
-  writes.push([k,v]);params.set(k,v);return true;
+  writes.push([k,v]);params.set(k,v);if(k.endsWith('scene_range')){const [a,b]=v.split(',').map(Number),i='abcd'.indexOf(k[0]);state.starts[i]=a-1;state.bars[i]=b;}return true;
  },
  host_module_get_param(k){reads++; if(failed)return null;return k==='twain_status'?JSON.stringify(state):params.get(k)??'0';},
  fill_rect(...v){rects.push(v);},clear_screen(){},print(x,y,s){text.push(s);}
@@ -37,8 +37,8 @@ assert.equal(buttons.get(58),16);
 down(92);assert.deepEqual(writes.at(-1),['monitor_safe','0']);up(92);assert.deepEqual(writes.at(-1),['a_t1_clip','1']);
 cc(86);down(85);up(85);cc(86,0);assert.deepEqual(writes.at(-1),['b_t2_record','1']);
 cc(119);down(76);up(76);cc(119,0);assert.deepEqual(writes.at(-1),['a_t3_clear','1']);
-cc(58);assert.equal(buttons.get(58),124);down(19);up(19);assert.deepEqual(writes.at(-1),['a_scene_bars','4']);
-cc(63);down(31);up(31);assert.deepEqual(writes.at(-1),['b_scene_bars','16']);
+cc(58);assert.equal(buttons.get(58),124);down(19);up(19);assert.deepEqual(writes.at(-1),['a_scene_range','1,4']);
+cc(63);down(31);up(31);assert.deepEqual(writes.at(-1),['b_scene_range','1,16']);
 cc(58,0);assert.equal(buttons.get(58),16);assert(text.includes('A Bar 1/4'));
 const before=writes.length;cc(71,5);assert(writes.some(([k,v])=>k==='a_t3_hp'&&v==='5')); // selected clip remains editable
 params.set('a_t1_level','100');down(92);cc(79,5);up(92);assert(writes.some(([k,v])=>k==='a_t1_level'&&v==='105'));assert.deepEqual(writes.at(-1),['edit_end','1']);
@@ -68,7 +68,7 @@ cc(56);assert.deepEqual(writes.at(-1),['undo','1']);
 params.set('a_t1_lp','73');down(92);
 const changes=writes.length;
 context.onMidiMessageInternal([0x90,1,127]);context.onMidiMessageInternal([0x80,1,0]);
-assert.equal(writes.length,changes);assert(text.includes('A1 LP filter: 73%'));
+assert.equal(writes.length,changes);assert(text.includes('A1 LP freq: 345 Hz'));
 now+=100;context.onMidiMessageInternal([0x90,1,127]);context.onMidiMessageInternal([0x80,1,0]);
 assert.deepEqual(writes.at(-1),['a_t1_lp','0']);up(92);
 assert.deepEqual(writes.at(-1),['edit_end','1']);
@@ -80,7 +80,7 @@ context.onMidiMessageInternal([0x90,0,127]);context.onMidiMessageInternal([0x80,
 context.onMidiMessageInternal([0x90,0,127]);up(92);
 assert.equal(params.get('a_t1_hp'),'41');
 params.set('b_t1_delay_rate','5');down(93);cc(78,1);up(93);
-assert.equal(params.get('b_t1_delay_rate'),'6');assert(text.includes('B1 Delay rate: 1/8T'));
+assert.equal(params.get('b_t1_delay_rate'),'6');assert(text.includes('B1 Delay time: 1/8T'));
 // Double touch knob 8 returns to the default eighth note, not rate index zero.
 down(93);for(let i=0;i<2;i++){now+=100;context.onMidiMessageInternal([0x90,7,127]);context.onMidiMessageInternal([0x80,7,0]);}up(93);
 assert.equal(params.get('b_t1_delay_rate'),'5');
@@ -93,7 +93,7 @@ up(92);assert.equal(params.get('a_t1_comp'),'55');
 
 params.set('a_t1_level','125');down(92);
 for(let i=0;i<2;i++){now+=100;context.onMidiMessageInternal([0x90,8,127]);context.onMidiMessageInternal([0x80,8,0]);}
-up(92);assert.equal(params.get('a_t1_level'),'100');
+up(92);assert.equal(params.get('a_t1_level'),'50');
 // A duplicate pad note-on must not perform both delete stages in one press.
 cc(119);down(92);const deletes=writes.filter(([k])=>k==='a_t1_clear').length;
 down(92);assert.equal(writes.filter(([k])=>k==='a_t1_clear').length,deletes);up(92);cc(119,0);
@@ -124,11 +124,11 @@ assert.equal(params.get('d_t1_mute'),'1');assert(!writes.slice(start).some(([k])
 // Mute alone toggles on release; repeated down packets cannot toggle twice.
 start=writes.length;cc(88);cc(88);assert.equal(writes.length,start);cc(88,0);
 assert.equal(params.get('master_mute'),'1');cc(88);cc(88,0);assert.equal(params.get('master_mute'),'0');
-state.master_mute=1;state.muted[2]=1;context.onResume();assert.equal(buttons.get(88),124);assert.equal(leds.get(94),51);
+state.master_mute=1;state.muted[2]=1;context.onResume();assert.equal(buttons.get(88),124);assert.equal(leds.get(94),Math.sin(now*2*Math.PI/3000)>-0.2?107:108);
 assert(text.includes('TWN MUTED'));
 // C and D keep independent lengths through the Loop gesture.
 cc(58);down(94);down(20);up(20);down(95);down(30);up(30);cc(58,0);
-assert.equal(params.get('c_scene_bars'),'5');assert.equal(params.get('d_scene_bars'),'15');
+assert.equal(params.get('c_scene_range'),'1,5');assert.equal(params.get('d_scene_range'),'1,15');
 // Parking cancels stale physical gestures without a launch or a global-volume claim.
 down(92);cc(49);context.overtakeParked=true;context.tick();assert.equal(claims.at(-1),0);
 context.overtakeParked=false;context.onResume();
@@ -180,7 +180,7 @@ console.log('Twain UI: acknowledged monitor writes, failed-delivery retry, perio
 state.redo=5;context.onResume();cc(49);assert.equal(buttons.get(56),124);cc(56);cc(49,0);
 assert.deepEqual(writes.at(-1),['redo','1']);
 state.muted[0]=1;cc(54);cc(55);cc(49);down(92);up(92);cc(49,0);
-assert.equal(leds.get(92),51); // muted selection remains pale purple
+assert.equal(leds.get(92),Math.sin(now*2*Math.PI/3000)>-0.2?107:108); // muted selection remains pale purple
 
 // Normal Play reaches Move once; Shift+Play never sends native Play/Stop.
 const native=[];context.move_midi_inject_to_move=packet=>{native.push(Array.from(packet));return true;};
@@ -190,3 +190,20 @@ assert(writes.slice(jumpStart).some(([k])=>k==='advance_last'));assert.equal(nat
 cc(85);cc(49);cc(85,0);cc(49,0);assert.equal(native.length,4); // modifier changes don't strand a held native button
 state.count_in=4;text.length=0;context.onResume();assert(text.includes('Count-in: 4'));
 state.count_in=0;state.advance=1;text.length=0;context.onResume();assert(text.includes('Last bar next'));
+
+// Low-velocity touch packets and quick taps work on the selected clip without holding it.
+state.advance=0;cc(49);down(93);up(93);cc(49,0);params.set('b_t1_lp','66');
+now+=1000;context.onMidiMessageInternal([0x90,1,1]);context.onMidiMessageInternal([0x90,1,0]);
+now+=80;context.onMidiMessageInternal([0x90,1,1]);context.onMidiMessageInternal([0x90,1,0]);
+assert.equal(params.get('b_t1_lp'),'0');
+
+// Shift controls the selected clip's secondary parameter and double touch resets its default.
+state.advance=0;params.set('b_t1_hp_res','30');cc(49);cc(71,5);assert.equal(params.get('b_t1_hp_res'),'35');
+now+=1000;context.onMidiMessageInternal([0x90,0,1]);context.onMidiMessageInternal([0x80,0,0]);now+=60;
+context.onMidiMessageInternal([0x90,0,1]);context.onMidiMessageInternal([0x80,0,0]);assert.equal(params.get('b_t1_hp_res'),'0');cc(49,0);
+cc(58);down(18);down(20);up(18);up(20);cc(58,0);assert.equal(params.get('a_scene_range'),'3,5');
+params.set('input_level','100');params.set('monitor_level','100');const priorMon=params.get('input_monitor');
+cc(86);cc(79,5);cc(86,0);assert.equal(params.get('input_level'),'105');assert.equal(claims.at(-1),0);
+cc(49);cc(86);cc(79,125);cc(86,0);cc(49,0);assert.equal(params.get('monitor_level'),'97');
+assert.equal(params.get('input_monitor'),priorMon); // monitor adjustment doesn't toggle it
+console.log('Twain UI: quick selected taps, Shift FX, scene range chord and independent input/monitor levels passed');

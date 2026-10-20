@@ -167,7 +167,7 @@ typedef struct {
     int      st;           /* mk_tstate_t */
     int      pending;      /* 0 none, 1 = start record, 2 = start play */
 #ifdef MARK_TWAIN
-    int      clip_muted;
+    int      clip_muted, clip_origin;
 #endif
     int      level;        /* 0..200, 100 = unity (RC play level) */
     int      pan;          /* 0..100, 50 = center */
@@ -959,13 +959,18 @@ mark_t *mark_create_in_dir(const host_api_v1_t *host, const char *module_dir) {
     for (int i = 0; i < MARK_TRACKS; i++) {
 #ifdef MARK_TWAIN
         m->t[i].clipfx.dirty = 1;
+        for(int j=0;j<8;j++)m->t[i].clipfx.secondary[j]=mark_clip_default(10+j);
         m->t[i].clipfx.delay_rate = TW_RATE_DEFAULT;
         m->t[i].clipfx.previous_rate = TW_RATE_DEFAULT;
         m->t[i].clipfx.rate_mix = 1;
 #endif
+#ifdef MARK_TWAIN
+        m->t[i].level = 50;
+#else
         m->t[i].level = 100;
+#endif
         m->t[i].pan = 50;
-        m->t[i].g_cur = 1.0f;
+        m->t[i].g_cur = m->t[i].level/100.0f;
         m->t[i].fx = TFX_LPF;      /* a sensible default once switched on */
         m->t[i].fxp = 50;
         m->t[i].fx_dirty = 1;
@@ -1471,7 +1476,13 @@ int mark_scene_seek(mark_t *m,double frames) {
     for(int i=0;i<MARK_TRACKS;i++)if(m->t[i].st==MK_REC || m->t[i].st==MK_DUB)return 0;
     for(int i=0;i<MARK_TRACKS;i++) {
         mk_track_t *t=&m->t[i];
-        if(t->len)t->pos=fmod(frames,t->len);
+        if(t->len) {
+            double offset=frames;
+#ifdef MARK_TWAIN
+            offset-=t->clip_origin*frames_per_measure(m);
+#endif
+            t->pos=fmod(fmod(offset,t->len)+t->len,t->len);
+        }
     }
     return 1;
 }
@@ -1507,6 +1518,9 @@ static void track_clear(mark_t *m, int ti) {
     t->st = MK_EMPTY;
     t->len = 0;
     t->full_len = 0;
+#ifdef MARK_TWAIN
+    t->clip_origin=0;
+#endif
     t->rec_len = 0;
     t->rec_target = 0;
     t->pending = 0;
@@ -1558,7 +1572,9 @@ int mark_clip_has_audio(mark_t *m,int ti) {
 }
 int mark_clip_custom(mark_t *m,int ti) {
     mk_track_t *t=&m->t[ti];
-    if(t->clip_muted || t->level!=100 || t->clipfx.delay_rate!=TW_RATE_DEFAULT)return 1;
+    if(t->clip_origin)return 1;
+    for(int i=0;i<8;i++)if(t->clipfx.secondary[i]!=mark_clip_default(10+i))return 1;
+    if(t->clip_muted || t->level!=50 || t->clipfx.delay_rate!=TW_RATE_DEFAULT)return 1;
     for(int i=0;i<7;i++)if(t->clipfx.value[i])return 1;
     return 0;
 }
@@ -1568,6 +1584,8 @@ int mark_clip_capture(mark_t *m,int ti,mark_clip_snapshot_t *s,int audio) {
     s->settings[0]=t->level;
     for(int i=0;i<7;i++)s->settings[i+1]=t->clipfx.value[i];
     s->settings[8]=t->clipfx.delay_rate; s->settings[9]=t->clip_muted;
+    for(int i=0;i<8;i++)s->settings[10+i]=t->clipfx.secondary[i];
+    s->settings[18]=t->clip_origin;
     s->len=t->st==MK_REC ? t->rec_len : t->len;
     s->full_len=t->st==MK_REC ? t->rec_len : t->full_len;
     s->state=t->st==MK_REC ? (s->len?MK_STOP:MK_EMPTY) : t->st;
@@ -1589,7 +1607,8 @@ int mark_clip_restore(mark_t *m,int ti,mark_clip_snapshot_t *s,int audio) {
         t->pos=s->len ? fmod(s->pos,s->len) : 0;
         if(m->grid_unit<=0)m->grid_unit=s->grid;
     }
-    t->level=s->settings[0];t->clip_muted=s->settings[9];
+    t->level=s->settings[0];t->clip_muted=s->settings[9];t->clip_origin=s->settings[18];
+    for(int i=0;i<8;i++)t->clipfx.secondary[i]=s->settings[10+i];
     for(int i=0;i<7;i++)t->clipfx.value[i]=s->settings[i+1];
     if(t->clipfx.delay_rate!=s->settings[8]) { t->clipfx.previous_rate=t->clipfx.delay_rate; t->clipfx.rate_mix=0; }
     t->clipfx.delay_rate=s->settings[8]; t->clipfx.dirty=1;
@@ -2495,6 +2514,9 @@ void mark_set_param(mark_t *m, const char *key, const char *val) {
             if(rate!=t->clipfx.delay_rate) { t->clipfx.previous_rate=t->clipfx.delay_rate; t->clipfx.rate_mix=0; }
             t->clipfx.delay_rate=rate; m->edit_rev++; return;
         }
+        if(!strcmp(k,"origin")) { t->clip_origin=clampi(atoi(val),0,15);return; }
+        int secondary=twain_secondary_index(k);
+        if(secondary>=0) { t->clipfx.secondary[secondary]=clampi(atoi(val),0,100);t->clipfx.dirty=1;m->edit_rev++;return; }
         int fx_index=twain_fx_index(k);
         if(fx_index>=0) { t->clipfx.value[fx_index]=clampi(atoi(val),0,100); t->clipfx.dirty=1; m->edit_rev++; return; }
 #endif
@@ -2709,6 +2731,9 @@ int mark_get_param(mark_t *m, const char *key, char *buf, int buf_len) {
         const mk_track_t *t = &m->t[ti];
 #ifdef MARK_TWAIN
         if(!strcmp(k,"delay_rate"))return snprintf(buf,(size_t)buf_len,"%d",t->clipfx.delay_rate);
+        if(!strcmp(k,"origin"))return snprintf(buf,(size_t)buf_len,"%d",t->clip_origin);
+        int secondary=twain_secondary_index(k);
+        if(secondary>=0)return snprintf(buf,(size_t)buf_len,"%d",t->clipfx.secondary[secondary]);
         int fx_index=twain_fx_index(k);
         if(fx_index>=0)return snprintf(buf,(size_t)buf_len,"%d",t->clipfx.value[fx_index]);
         if (!strcmp(k,"mute")) return snprintf(buf,(size_t)buf_len,"%d",t->clip_muted);

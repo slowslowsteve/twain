@@ -9,12 +9,16 @@ const dspGet=host_module_get_param, dspSet=host_module_set_param;
 const dspCritical=typeof host_module_set_param_blocking==='function'?host_module_set_param_blocking:dspSet;
 const projects=createProjectController({get:dspGet,set:(key,value)=>dspCritical(key,value,500),notice:text=>notice(text)});
 const FX=['hp','lp','comp','sat','chorus','reverb','delay','delay_rate'];
-const FX_NAMES=['HP filter','LP filter','Compression','Drive','Chorus','Reverb','Delay','Delay rate'];
+const ALT=['hp_res','lp_res','comp_attack','sat_dirt','chorus_rate','reverb_decay','delay_feedback','delay_wow'];
+const ALT_NAMES=['HP res','LP res','Attack','Dirt','Ch rate','Rev decay','Feedback','Wow/flutter'];
+const ALT_DEFAULT=[0,0,35,50,28,35,50,0];
+const FX_NAMES=['HP freq','LP freq','Comp','Drive','Chorus','Reverb','Delay','Delay time'];
 const RATES=['1/1','1/2','1/2T','1/4','1/4T','1/8','1/8T','1/16','1/16T','1/32','1/32T','1/64'];
 let bank=0, selected=null, editingClip=null, lastEditAt=0, lastProject=null, lastSafety=-1, lastSafetyAt=-10000;
 let snapshot=null, held=null, rec=false, del=false, loop=false, editScene=0;
 let pressed=new Map(), shift=false, mute=false, muteUsed=false;
-let masterEditing=false, playRoute=null;
+let masterEditing=false, playRoute=null, monitorChord=false, monitorUsed=false;
+let rangeSteps=new Set(),rangeAnchor=null,rangeSent=false,rangeScene=0;
 let ticks=0, lastForce=-10000, overlay='', overlayUntil=0;
 function claimVolume(on) {
     if(typeof shadow_set_overtake_suppress_master_volume==='function')
@@ -27,7 +31,7 @@ function nativePlay(value) {
     notice('Host: Play unavailable');return false;
 }
 function releasePlay() { if(playRoute==='native')nativePlay(0);playRoute=null; }
-function volumeClaim() { claimVolume(shift || pressed.size>0); }
+function volumeClaim() { claimVolume(shift || rec || monitorChord || pressed.size>0); }
 function key(clip,name) { return `${prefix(clip.scene)}t${clip.track+1}_${name}`; }
 function clipAt(note) {
     if(note<68 || note>99 || (note-68)%8>3)return null;
@@ -79,14 +83,14 @@ function paint() {
         return;
     }
     if(projects.dirty)print(118,2,'*',1);
-    const s=loop?editScene:snapshot.scene, bars=snapshot.bars[s];
+    const s=loop?editScene:snapshot.scene, bars=snapshot.bars[s],start=snapshot.starts?.[s] || 0;
     const phase=Math.max(0,Math.min(snapshot.phase,snapshot.bars[snapshot.scene]-0.0001));
     const bar=Math.floor(phase)+1, beat=Math.floor((phase%1)*4)+1;
-    print(2,2,loop?`Set ${label(s)}: ${bars} bars`:`${label(snapshot.scene)} Bar ${bar}/${snapshot.bars[snapshot.scene]}`,1);
+    print(2,2,loop?`Set ${label(s)}: ${start+1}-${bars}`:`${label(snapshot.scene)} Bar ${bar}/${snapshot.bars[snapshot.scene]}`,1);
     print(2,14,`${projects.name.slice(0,13)} ${bank?'5-8':'1-4'}`,1);
     if(snapshot.count_in)print(2,28,`Count-in: ${snapshot.count_in}`,1);
     else if(snapshot.advance)print(2,28,'Last bar next',1);
-    else if(now<overlayUntil) print(2,28,overlay,1);
+    else if(now<overlayUntil) print(2,28,overlay.slice(0,21),1);
     else if(snapshot.stopped) print(2,28,'Stopped',1);
     else if(snapshot.pending>=0) print(2,28,`Next ${label(snapshot.pending)} at end`,1);
     else {
@@ -107,18 +111,19 @@ function paint() {
     if(meter)fill_rect(87,44,meter,4,1);
     if(snapshot.clip)print(121,41,'!',1);
     // Persistent segmented timeline: the current bar fills through its beats.
-    const total=snapshot.bars[snapshot.scene], width=124/total;
+    const activeStart=snapshot.starts?.[snapshot.scene] || 0;
+    const total=snapshot.bars[snapshot.scene]-activeStart, width=124/total;
     for(let i=0;i<total;i++) {
         const x=2+Math.floor(i*width), w=Math.max(2,Math.floor((i+1)*width)-Math.floor(i*width)-1);
         fill_rect(x,54,w,1,1);fill_rect(x,62,w,1,1);
         fill_rect(x,54,1,9,1);fill_rect(x+w-1,54,1,9,1);
-        const progress=Math.max(0,Math.min(1,phase-i));
+        const progress=Math.max(0,Math.min(1,phase-activeStart-i));
         if(progress>0)fill_rect(x+1,56,Math.round((w-2)*progress),5,1);
     }
     for(let i=0;i<16;i++) {
         const current=(snapshot.count_in || snapshot.bars[snapshot.scene]===1)?Math.floor((phase%1)*16):bar-1;
-        const color=loop?(i===bars-1?White:i<bars?16:LightGrey)
-            :i===current?White:i<snapshot.bars[snapshot.scene] || snapshot.count_in || snapshot.bars[snapshot.scene]===1?33:Black;
+        const color=loop?((i===start || i===bars-1)?White:i>=start && i<bars?16:LightGrey)
+            :i===current?White:(i>=activeStart && i<snapshot.bars[snapshot.scene]) || snapshot.count_in || snapshot.bars[snapshot.scene]===1?33:Black;
         setLED(16+i,color,force);
     }
     const scenes=[snapshot.a,snapshot.b,snapshot.c,snapshot.d].map(v=>v.split('|').map(p=>p.split(',').map(Number)));
@@ -129,7 +134,7 @@ function paint() {
             const state=scenes[col][0][layer], armed=snapshot.armed[col][layer];
             const custom=snapshot.custom && (snapshot.custom[col] & (1<<layer));
             color=[custom?[97,104,16,33][col]:119,BrightRed,Green,Green,8][state] || 119;
-            if(snapshot.muted && (snapshot.muted[col] & (1<<layer)))color=51;
+            if(snapshot.muted && (snapshot.muted[col] & (1<<layer)))color=Math.sin(now*2*Math.PI/3000)>-0.2?107:108;
             if(selected && selected.scene===col && selected.track===layer && state!==1 && !(snapshot.muted && (snapshot.muted[col] & (1<<layer))))color=White;
             if(armed)color=blink?(armed===1||armed===4?BrightRed:armed===3?8:Green):Black;
             else if(snapshot.pending===col && !blink)color=Black;
@@ -141,7 +146,7 @@ function paint() {
 }
 function refresh() { poll(); paint(); }
 function notice(text) { overlay=text; overlayUntil=Date.now()+1800; announce(text); }
-function paramFor(controller) { return controller===MoveMaster?'level':FX[controller-MoveKnob1]; }
+function paramFor(controller) { return controller===MoveMaster?'level':(shift?ALT:FX)[controller-MoveKnob1]; }
 function readValue(param,fresh=false) {
     const target=editTarget();
     if(fresh || target.values[param]===undefined) {
@@ -154,8 +159,14 @@ function readValue(param,fresh=false) {
 }
 function showValue(controller,param,value) {
     const target=editTarget();
-    const name=param==='level'?'Volume':FX_NAMES[controller-MoveKnob1];
-    const amount=param==='delay_rate'?RATES[value]:`${value}%`;
+    const name=param==='level'?'Volume':ALT.includes(param)?ALT_NAMES[ALT.indexOf(param)]:FX_NAMES[controller-MoveKnob1];
+    let amount=param==='delay_rate'?RATES[value]:`${value}%`;
+    if(param==='hp')amount=value===0?'Bypass':`${Math.round(25*Math.pow(400,value/100))} Hz`;
+    if(param==='lp')amount=value===0?'Bypass':`${Math.round(18000*Math.pow(80/18000,value/100))} Hz`;
+    if(param==='comp_attack')amount=`${(0.1*Math.pow(1000,value/100)).toFixed(1)} ms`;
+    if(param==='chorus_rate')amount=`${(0.05+8*(value/100)**2).toFixed(2)} Hz`;
+    if(param==='reverb_decay')amount=`${(0.2*Math.pow(100,value/100)).toFixed(1)} s`;
+    if(param==='delay_feedback')amount=`${(value*0.995).toFixed(1)}%`;
     notice(`${label(target.scene)}${target.track+1} ${name}: ${amount}`);
 }
 function beginEdit() {
@@ -182,7 +193,7 @@ function knobTouch(controller) {
     const count=previous && now-previous.at<600 ? previous.count+1 : 1;
     target.taps[param]={at:now,count};
     if(count===2) {
-        const reset=param==='level'?100:param==='delay_rate'?5:0;
+        const reset=param==='level'?50:param==='delay_rate'?5:ALT.includes(param)?ALT_DEFAULT[ALT.indexOf(param)]:0;
         if(value!==reset) { beginEdit();dspSet(key(target,param),String(reset));target.values[param]=reset; }
         target.taps[param]=null;
         showValue(controller,param,reset);
@@ -208,15 +219,15 @@ function muteClip(clip) {
     notice(`${label(clip.scene)}${clip.track+1} ${next==='1'?'muted':'unmuted'}`);
 }
 globalThis.init=function(){monitorSafety();projects.tick(true);refresh();};
-globalThis.onResume=function() { releasePlay(); monitorSafety(true);endEdit();endMasterEdit(); pressed.clear();held=null;shift=mute=muteUsed=false; claimVolume(false); rec=del=loop=false; lastForce=-10000;projects.tick(true); refresh(); };
+globalThis.onResume=function() { releasePlay(); monitorSafety(true);endEdit();endMasterEdit(); pressed.clear();held=null;shift=mute=muteUsed=false; claimVolume(false); rec=del=loop=monitorChord=monitorUsed=false;rangeSteps.clear();rangeAnchor=null; lastForce=-10000;projects.tick(true); refresh(); };
 globalThis.tick=function() {
     monitorSafety();
     if(editingClip && !held && Date.now()-lastEditAt>600)endEdit();
-    if(globalThis.overtakeParked && (pressed.size || shift || mute)) {
-        endEdit();endMasterEdit();pressed.clear();held=null;shift=mute=muteUsed=false;claimVolume(false);
+    if(globalThis.overtakeParked && (pressed.size || shift || mute || rec || monitorChord)) {
+        endEdit();endMasterEdit();pressed.clear();held=null;shift=mute=muteUsed=rec=monitorChord=false;claimVolume(false);
     }
     projects.tick();
-    if(projects.modal && (held || shift)) { endEdit();endMasterEdit();pressed.clear();held=null;shift=false;claimVolume(false); }
+    if(projects.modal && (held || shift || rec || monitorChord)) { endEdit();endMasterEdit();pressed.clear();held=null;shift=false;claimVolume(false); }
     if(++ticks%2===0)poll();paint();
 };
 globalThis.onMidiMessageInternal=function(data) {
@@ -241,13 +252,16 @@ globalThis.onMidiMessageInternal=function(data) {
         projects.click(shift);refresh();return;
     }
     const release=type===0x80 || (type===0x90 && value===0) || (type===0xb0 && value===0);
-    const nativeVolume=type===0xb0 && note===MoveMaster && !held && !shift;
+    const nativeVolume=type===0xb0 && note===MoveMaster && !held && !shift && !rec && !monitorChord;
     if(!release && !nativeVolume && !projects.guard()) {
-        endEdit();endMasterEdit();pressed.clear();held=null;shift=false;claimVolume(false);paint();return;
+        endEdit();endMasterEdit();pressed.clear();held=null;shift=rec=monitorChord=false;claimVolume(false);paint();return;
     }
     if((type===0x90 || type===0x80) && note<=8) {
-        const down=type===0x90 && value>=64;
-        if(note===8 && shift && down) {
+        const down=type===0x90 && value>0;
+        if(note===8 && (rec || monitorChord) && down) {
+            const param=shift||monitorChord?'monitor_level':'input_level';monitorUsed=true;notice(`${param==='input_level'?'Input gain':'Monitor'}: ${dspGet(param)}%`);
+        }
+        else if(note===8 && shift && down) {
             for(const clip of pressed.values())clip.used=true;
             poll();
         }
@@ -262,7 +276,7 @@ globalThis.onMidiMessageInternal=function(data) {
     }
     if(type===0xb0) {
         if(note===MoveShift) {
-            shift=value>0;if(!shift)endMasterEdit();volumeClaim();paint();return;
+            shift=value>0;if(!shift || rec)endMasterEdit();volumeClaim();paint();return;
         }
         if(note===MoveMute) {
             if(value>0 && !mute) {
@@ -284,21 +298,25 @@ globalThis.onMidiMessageInternal=function(data) {
             const operation=shift?'redo':'undo',available=snapshot && snapshot[operation]>0;
             dspCritical(operation,'1',100);poll();notice(available?`${shift?'Redo':'Undo'}: ${snapshot[operation]} left`:`Nothing to ${operation}`);paint();return;
         }
-        if(note===MoveLoop) { for(const clip of pressed.values())clip.used=true;loop=value>0; if(loop)editScene=snapshot?snapshot.scene:0; paint(); return; }
+        if(note===MoveLoop) { for(const clip of pressed.values())clip.used=true;loop=value>0;if(!loop){if(rangeAnchor!==null && !rangeSent)dspCritical(prefix(rangeScene)+'scene_range',`1,${rangeAnchor-15}`,100);rangeSteps.clear();rangeAnchor=null;rangeSent=false;} if(loop)editScene=snapshot?snapshot.scene:0; paint(); return; }
         if((note===MoveUp || note===MoveDown) && value>0) {
             endEdit();for(const clip of pressed.values())clip.used=true;
             pressed.clear();held=null;bank=note===MoveDown?1:0;
             const row=selected?selected.track%4:0,scene=selected?selected.scene:(snapshot?snapshot.scene:0);
             selected=clipAt(92-row*8+scene);volumeClaim();refresh();return;
         }
-        if(note===MoveRec && shift) {
-            if(value>0) {
-                monitorSafety(true);dspCritical('input_monitor',dspGet('input_monitor')==='1'?'0':'1',100);
-                poll();notice(snapshot && snapshot.monitor_blocked?'Monitor: headphones':snapshot && snapshot.monitor?'Monitor on':'Monitor off');
+        if(note===MoveRec) {
+            if(value>0) { endMasterEdit();monitorChord=shift;monitorUsed=false;rec=!monitorChord; }
+            else {
+                if(monitorChord && !monitorUsed) {
+                    monitorSafety(true);dspCritical('input_monitor',dspGet('input_monitor')==='1'?'0':'1',100);
+                    poll();notice(snapshot && snapshot.monitor_blocked?'Monitor: headphones':snapshot && snapshot.monitor?'Monitor on':'Monitor off');
+                }
+                rec=false;monitorChord=false;endMasterEdit();
             }
-            rec=false;paint();return;
+            for(const clip of pressed.values())clip.used=true;
+            volumeClaim();paint();return;
         }
-        if(note===MoveRec) { rec=value>0; for(const clip of pressed.values())clip.used=true; paint(); return; }
         if(note===MoveDelete) { del=value>0; for(const clip of pressed.values())clip.used=true; paint(); return; }
         if((note===MoveLeft || note===MoveRight) && value>0) {
             const base=loop?editScene:snapshot && snapshot.pending>=0?snapshot.pending:snapshot?snapshot.scene:0;
@@ -308,7 +326,15 @@ globalThis.onMidiMessageInternal=function(data) {
             refresh(); return;
         }
         if(note===MoveMaster) {
-            if(shift) {
+            if(rec || monitorChord) {
+                monitorUsed=true;for(const clip of pressed.values())clip.used=true;
+                const param=shift||monitorChord?'monitor_level':'input_level',delta=decodeDelta(value);
+                if(typeof shadow_set_overtake_suppress_master_volume==='function' && delta) {
+                    if(!masterEditing) { dspCritical('master_edit_begin','1',100);masterEditing=true; }
+                    const next=Math.max(0,Math.min(param==='input_level'?400:200,Number(dspGet(param))+delta));
+                    dspCritical(param,String(next),100);notice(`${param==='input_level'?'Input gain':'Monitor'}: ${next}%`);
+                }
+            } else if(shift) {
                 for(const clip of pressed.values())clip.used=true;
                 const delta=decodeDelta(value);
                 if(typeof shadow_set_overtake_suppress_master_volume==='function' && delta) {
@@ -325,10 +351,20 @@ globalThis.onMidiMessageInternal=function(data) {
         }
         if(note>=MoveKnob1 && note<MoveKnob1+8) { adjust(note,value); paint(); return; }
     }
-    if(type===0x90 && value>0) {
-        if(loop && note>=16 && note<=31) {
-            dspSet(prefix(editScene)+'scene_bars',String(note-15)); refresh(); return;
+    if(loop && note>=16 && note<=31 && (type===0x90 || type===0x80)) {
+        if(type===0x90 && value>0) {
+            if(rangeAnchor===null) { rangeAnchor=note;rangeSent=false;rangeScene=editScene; }
+            rangeSteps.add(note);
+            if(rangeSteps.size>1) {
+                dspCritical(prefix(rangeScene)+'scene_range',`${Math.min(rangeAnchor,note)-15},${Math.max(rangeAnchor,note)-15}`,100);rangeSent=true;
+            }
+        } else {
+            if(!rangeSent && rangeAnchor!==null)dspCritical(prefix(rangeScene)+'scene_range',`1,${rangeAnchor-15}`,100);
+            rangeSteps.delete(note);if(!rangeSteps.size){rangeAnchor=null;rangeSent=false;}
         }
+        refresh();return;
+    }
+    if(type===0x90 && value>0) {
         const clip=clipAt(note); if(!clip)return;
         if(pressed.has(note))return;
         if(loop) { editScene=clip.scene; paint(); return; }

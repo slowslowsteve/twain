@@ -144,9 +144,13 @@ void mark_clip_record(mark_t *m, int track, uint32_t frames);
 typedef struct {
     int16_t *audio;
     uint32_t len, full_len;
-    int state, settings[10]; /* level, seven amounts, delay rate, mute */
+    int state, settings[19]; /* level, 7 amounts, rate, mute, 8 Shift controls, origin bar */
     double pos, grid;
 } mark_clip_snapshot_t;
+static inline int mark_clip_default(int i) {
+    static const int alt[8]={0,0,35,50,28,35,50,0};
+    return i==0?50:i==8?5:i>=10&&i<18?alt[i-10]:0;
+}
 int mark_clip_capture(mark_t *, int, mark_clip_snapshot_t *, int audio);
 int mark_clip_restore(mark_t *, int, mark_clip_snapshot_t *, int audio);
 int mark_clip_has_audio(mark_t *, int);

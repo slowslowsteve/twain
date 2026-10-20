@@ -1,4 +1,4 @@
-# Twain 0.7.0 prototype
+# Twain 0.8.0 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -36,7 +36,8 @@ of stereo capacity at 44.1 kHz.
 - Hold Delete and press a clip to clear audio while keeping its settings.
   If already empty, Delete+pad resets volume, FX, delay rate and mute. Another
   delete on a default empty clip does nothing. Both stages are undoable.
-- Hold a clip and turn Volume for its level (0–200%). With several pads held,
+- Hold a clip and turn Volume for its level (0–200%). New clips start at 50%
+  on the original gain curve; existing saved levels are kept. With several pads held,
   knob edits address the last pressed clip; other unused pads retain their taps.
 - Volume alone always controls Move's master. Shift+Volume controls Twain's
   master (0–200%) using the existing host volume-ownership binding. This needs
@@ -52,8 +53,11 @@ of stereo capacity at 44.1 kHz.
   Drive, chorus, reverb and delay. Knob 8 chooses a quantized delay rate.
   Touch a knob to see the selected clip’s
   value; two separate touches within 600 ms reset it. Turns cancel the tap
-  sequence. Effects reset to zero, volume to 100%, delay rate to 1/8.
-- Hold Loop and press bottom step 1–16 to select scene length. While Loop is
+  sequence. Main effect amounts reset to zero, clip volume to 50%, delay rate to 1/8;
+  Shift parameters reset to their musical defaults. Low-velocity touch notes
+  are accepted, including fast double taps with the pad released.
+- Hold Loop and hold two bottom steps to select inclusive start/end bars
+  (hold 3, press 5 for bars 3–5). A single step still selects bars 1–N. While Loop is
   held, a clip column selects the scene to edit, or use Left/Right. Release
   Loop to return to normal performance. All four scene lengths are independent.
 - Left/Right in performance moves the requested scene through A–D. Further
@@ -77,7 +81,8 @@ the bar/beat and select length while Loop is held.
 
 Empty pads are dim neutral; empty clips with retained settings have a subtle
 scene tint. Recording is red, playing green, stopped amber, and muted clips
-are pale purple, including when selected. Queued actions blink; the queued scene pulses. Held pads turn
+use dim, saturated purple with a slow pulse between the two dark purple palette
+shades, including when selected. Queued actions blink; the queued scene pulses. Held pads turn
 white; the selected clip stays white and its state appears on screen. Loop, Record, Delete, Undo and Mute indicate their availability/state.
 Ordinary Play is forwarded once through the installed host’s
 `move_midi_inject_to_move` binding; the manifest no longer passes Play through
@@ -103,21 +108,44 @@ the host’s acknowledged parameter path; failed safety writes retry and a
 periodic refresh repairs lost state after reconnecting. Monitor audio follows Twain master
 volume/mute and is not a second recording path.
 
+Hold Record and turn Volume for digital recording-input trim (0–400%).
+Hold Shift+Record and turn Volume for monitor level (0–200%). These gestures
+claim Volume only while held; Volume alone remains Move’s master. Tapping
+Shift+Record without turning Volume toggles monitoring on release. The levels
+save with the project and are undoable. Monitor level never changes recorded
+samples. Input trim affects both capture and monitoring, and the meter warns
+about source clipping or clipping introduced by digital gain. It cannot repair
+clipping in the physical mic preamp; no preamp-gain host API was found.
+
 Every new take has a fixed subtle preamp character: light rounding and softened
 highs, baked in once before capture. There is no clean/warm switch or flutter.
 Existing recordings are unchanged and loading never reapplies the colour.
 
 ## Effects and undo
 
-Reverb uses eight damped parallel combs and four serial allpass diffusers per
-channel for a denser tail on percussion. Its return is now stronger, with
-a slight reduction in dry signal at high amounts; the decay remains unchanged. Delay amount increases both send and
-feedback, capped at 72%; the feedback loop is damped and all repeats decay.
-Compression blends hard-knee 12:1 compression with up to 18 dB automatic makeup.
-Drive replaces the former saturation with four-times interpolated soft clipping,
-a gentle asymmetric curve, tone filtering and DC removal. It retains RMS
-compensation without makeup gain; saved `sat` values remain compatible. All effects are per clip;
-sound quality and CPU with eight fully effected clips need listening on Move.
+The main knobs and Shift layer are always assigned to the selected clip:
+
+| Knob | Normal turn | Shift + turn |
+|---|---|---|
+| 1 | HP cutoff (bypass at zero) | HP resonance |
+| 2 | LP cutoff (bypass at zero) | LP resonance |
+| 3 | Compression amount + automatic makeup | Attack, 0.1–100 ms |
+| 4 | Drive wet amount | Dirt / drive intensity |
+| 5 | Chorus wet amount | Rate, 0.05–8.05 Hz |
+| 6 | Reverb send | Decay, 0.2–20 seconds |
+| 7 | Delay send | Feedback, 0–99.5% |
+| 8 | Quantized delay time | Delay wow/flutter |
+
+HP and LP are warm, resonant two-pole (12 dB/octave) filters inspired by the
+requested MS-20 character; they are not a circuit-exact MS-20 emulation.
+Drive keeps four-times interpolated soft clipping, DC removal and RMS
+compensation. Dirt is independent of wet amount. Compression retains its
+12:1 curve and up to 18 dB makeup; attack changes transient response.
+Reverb uses eight damped combs and four allpass diffusers per channel.
+Delay feedback is independent of send and stays below unity, with damping
+and gentle limiting inside the feedback loop. Wow/flutter modulates only
+the delay repeats. Quantized rate changes still crossfade over 20 ms.
+Sound quality and CPU with eight effected clips need listening on Move.
 
 Knob 8 rates, shortest to longest counterclockwise:
 1/64, 1/32T, 1/32, 1/16T, 1/16, 1/8T, 1/8 (default), 1/4T, 1/4,
@@ -164,8 +192,8 @@ Set 23, a new Set 24 and its copy, not the execution of the in-module gate.
   it cannot undo the native Move switch. Reopen that Move project or click
   the jog again to revisit switching. A choice from an obsolete project's
   dialog is not applied to a newly opened project.
-- All four scenes, 32 clips' raw stereo audio, seven FX amounts, delay rates,
-  clip volume/mute, scene lengths, selected scene and master volume/mute save
+- All four scenes, 32 clips' raw stereo audio, main and Shift FX parameters, delay rates,
+  clip volume/mute, scene ranges, recording origins, input/monitor levels, selected scene and master volume/mute save
   together. Playback reloads stopped at bar 1; FX tails, undo/redo history and transport/count-in state are
   not saved. Press native Play and launch clips to continue.
 - Save waits for completed recordings: if a take is still armed/recording,
@@ -196,8 +224,10 @@ No file I/O, buffer copying or allocation occurs on render. A persistent worker
 is created with Twain. Saves borrow stable audio buffers while mutation is
 locked; loads temporarily need roughly another 510 MiB for private engines
 on top of the approximately 561 MiB normal audio/FX/undo budget. Allocation
-fails safely rather than reducing 60-second capacity. Old four-layer saves load with layers 5–8 empty; new saves contain eight
-layers and cannot be opened by older Twain versions. Save before upgrading
+fails safely rather than reducing 60-second capacity. Version-1 four- and eight-layer saves load with their original audio and
+levels intact, default Shift FX settings and start bar 1. Version-2 saves
+include ranges, per-clip recording origins, Shift FX and input/monitor levels;
+older Twain versions cannot open those new saves. Save before upgrading
 and keep backups of important .twp files. Empty calloc pages need not occupy
 physical RAM until touched; the full reserved budget is still higher. Four native generators
 remain available. Sound, CPU/disk timing and real power-cycle recovery still

@@ -171,9 +171,11 @@ static void test_clip_fx(void) {
     assert(twain_delay_frames(88200,11)==1378);
     assert(twain_delay_frames(529200,0)==529200); // full bar at 20 BPM, no truncation
     assert(twain_fx_index("reverb")==5 && twain_fx_index("invalid")==-1);
+    assert(twain_secondary_index("delay_wow")==7 && twain_secondary_index("invalid")==-1);
     for(int effect=0;effect<7;effect++) {
         twain_fx_t *f=calloc(1,sizeof(*f)); assert(f);
         f->delay_rate=TW_RATE_DEFAULT; f->previous_rate=TW_RATE_DEFAULT; f->rate_mix=1;
+        for(int j=0;j<8;j++)f->secondary[j]=mark_clip_default(10+j);
         f->value[effect]=100; f->dirty=1; twain_fx_prepare(f);
         /* Let the click-free control ramp settle before the impulse. */
         for(int n=0;n<4096;n++) { float l=0,r=0;twain_fx_run(f,&l,&r,88200); }
@@ -192,11 +194,13 @@ static void test_clip_fx(void) {
         if(effect>=5)assert(tail>100);
         free(f);
     }
-    /* More delay amount must increase repeat persistence, while every tail decays. */
+    /* Feedback is independent of send; higher feedback sustains more repeats. */
     double persistence[2]={0};
     for(int setting=0;setting<2;setting++) {
         twain_fx_t *echo=calloc(1,sizeof(*echo));assert(echo);
-        echo->value[6]=setting?100:30;echo->amount[6]=echo->value[6]/100.0f;
+        for(int j=0;j<8;j++)echo->secondary[j]=mark_clip_default(10+j);
+        echo->secondary[6]=setting?65:25;echo->dirty=1;twain_fx_prepare(echo);
+        echo->value[6]=100;echo->amount[6]=echo->value[6]/100.0f;
         echo->delay_rate=echo->previous_rate=5;echo->rate_mix=1;
         double first=0,later=0,end=0;
         for(int n=0;n<MARK_SR*6;n++) {
@@ -212,6 +216,7 @@ static void test_clip_fx(void) {
     assert(persistence[1]>persistence[0]*2);
     /* Percussive reverb must be diffuse rather than four isolated echoes. */
     twain_fx_t *room=calloc(1,sizeof(*room));assert(room);
+    for(int j=0;j<8;j++)room->secondary[j]=mark_clip_default(10+j);room->dirty=1;twain_fx_prepare(room);
     room->value[5]=100;room->amount[5]=1;
     int occupied=0;double early=0,late=0;
     for(int n=0;n<MARK_SR*3;n++) {
@@ -221,6 +226,16 @@ static void test_clip_fx(void) {
         if(n>MARK_SR*2)late+=l*l;
     }
     assert(occupied>12000 && late<early*0.01);free(room);
+    /* Maximum resonance, long decay and near-unity repeats stay finite together. */
+    twain_fx_t *extreme=calloc(1,sizeof(*extreme));assert(extreme);
+    for(int j=0;j<7;j++)extreme->value[j]=100;
+    for(int j=0;j<8;j++)extreme->secondary[j]=100;
+    extreme->delay_rate=extreme->previous_rate=5;extreme->rate_mix=1;extreme->dirty=1;twain_fx_prepare(extreme);
+    for(int n=0;n<MARK_SR*3;n++) {
+        float l=n<MARK_SR?22000*sinf(6.2831853f*120*n/MARK_SR):0,r=l;
+        twain_fx_run(extreme,&l,&r,88200);assert(isfinite(l)&&isfinite(r)&&fabsf(l)<=32768&&fabsf(r)<=32768);
+    }
+    free(extreme);
     twain_fx_t *f=calloc(1,sizeof(*f)); assert(f); f->dirty=1;twain_fx_prepare(f);
     float l=2345,r=-2345;twain_fx_run(f,&l,&r,88200);assert(l==2345 && r==-2345);free(f);
 }
@@ -312,7 +327,7 @@ static void test_four_scenes_and_mutes(void) {
     twain_set_param(t,"d_t1_mute","1");
     twain_get_param(t,"twain_status",json,sizeof json);assert(strstr(json,"\"muted\":[0,0,0,1]"));
     render(t,25);twain_get_param(t,"tpos",after,sizeof after);assert(strcmp(before,after));
-    expect(t,"tstates","2,2,2,2");expect(t,"d_t1_level","100");
+    expect(t,"tstates","2,2,2,2");expect(t,"d_t1_level","50");
     twain_set_param(t,"undo","1");expect(t,"d_t1_mute","0");
     render(t,50);int audible=output_sample(t);assert(audible>100);
     for(int clip=1;clip<=4;clip++) { snprintf(key,sizeof key,"d_t%d_mute",clip);twain_set_param(t,key,"1"); }
@@ -346,6 +361,35 @@ static void test_four_scenes_and_mutes(void) {
     twain_destroy(t);
     puts("Twain: four scene boundaries, simultaneous launch, mute transport and master gain passed");
 }
+static void test_ranges_and_input(void) {
+    twain_t *t=twain_create(NULL,NULL);assert(t);
+    expect(t,"a_t1_level","50");twain_set_param(t,"scene_bars","8");
+    twain_set_param(t,"quantize","0");twain_set_param(t,"a_t1_btn","1");frames(t,88200*8);
+    twain_set_param(t,"scene_range","3,5");frames(t,88200);
+    expect(t,"scene_bar","3");expect(t,"tpos","32,0,0,0");
+    frames(t,88200*3);expect(t,"scene_bar","3");expect(t,"tpos","32,0,0,0");
+    twain_set_param(t,"a_t2_record","1");frames(t,88200*3);expect(t,"a_t2_origin","2");
+    frames(t,88200*3);expect(t,"a_t2_len","264600");expect(t,"tpos","32,0,0,0");
+    twain_set_param(t,"scene_range","5,3");expect(t,"scene_start","3");
+    twain_destroy(t);
+    t=twain_create(NULL,NULL);assert(t);twain_set_param(t,"scene_range","3,5");
+    twain_set_param(t,"undo","1");expect(t,"scene_start","1");expect(t,"scene_bars","1");
+    twain_set_param(t,"redo","1");expect(t,"scene_start","3");expect(t,"scene_bars","5");
+    uint8_t start=0xfa,tick=0xf8;twain_set_param(t,"a_t1_record","1");twain_on_midi(t,&start,1,3);render(t,1);
+    for(int i=0;i<96;i++){twain_on_midi(t,&tick,1,3);render(t,1);}expect(t,"scene_bar","3");expect(t,"tstates","1,0,0,0");
+    for(int i=0;i<288;i++){twain_on_midi(t,&tick,1,3);render(t,1);}expect(t,"scene_bar","3");expect(t,"tstates","2,0,0,0");
+    twain_destroy(t);
+    t=twain_create(NULL,NULL);assert(t);uint8_t stop=0xfc;twain_on_midi(t,&stop,1,3);
+    twain_set_param(t,"input_monitor","1");twain_set_param(t,"monitor_safe","1");
+    int16_t in[256],out[256];for(int i=0;i<256;i++)in[i]=8000;
+    twain_process(t,in,out,128);int normal=out[254];
+    twain_set_param(t,"monitor_level","50");twain_process(t,in,out,128);assert(abs(out[254]*2-normal)<10);
+    twain_set_param(t,"input_level","200");twain_process(t,in,out,128);assert(out[254]>normal*0.98 && out[254]<normal*1.01);
+    twain_set_param(t,"monitor_level","0");twain_process(t,in,out,128);for(int i=0;i<256;i++)assert(out[i]==0);
+    expect(t,"input_level","200");twain_set_param(t,"undo","1");expect(t,"monitor_level","50");
+    twain_destroy(t);
+    puts("Twain: inclusive ranges, recording origins, range undo/redo, independent input trim and monitoring passed");
+}
 static void test_advance_last(void) {
     twain_t *t=twain_create(NULL,NULL);assert(t);char json[2048];
     twain_set_param(t,"scene_bars","8");
@@ -377,7 +421,7 @@ static void test_redo_controls(void) {
     twain_set_param(t,"master_mute","1");twain_set_param(t,"a_t8_mute","1");twain_set_param(t,"a_t8_level","80");
     for(int i=0;i<5;i++)twain_set_param(t,"undo","1");
     expect(t,"scene_bars","1");expect(t,"master_level","100");expect(t,"master_mute","0");
-    expect(t,"a_t8_mute","0");expect(t,"a_t8_level","100");expect(t,"redo_count","5");
+    expect(t,"a_t8_mute","0");expect(t,"a_t8_level","50");expect(t,"redo_count","5");
     for(int i=0;i<5;i++)twain_set_param(t,"redo","1");
     expect(t,"scene_bars","8");expect(t,"master_level","73");expect(t,"master_mute","1");
     expect(t,"a_t8_mute","1");expect(t,"a_t8_level","80");expect(t,"redo_count","0");
@@ -402,6 +446,7 @@ static void test_input_monitor(void) {
     twain_destroy(t);puts("Twain: stopped-transport monitoring, feedback gate, subtle warmth and raw input meter passed");
 }
 int main(void) {
+    test_ranges_and_input();
     test_advance_last();
     test_redo_controls();
     test_input_monitor();
