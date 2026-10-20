@@ -72,3 +72,21 @@ running Twain before relaunching so the new code loads.
 
 These are prototype builds, not Mark releases. Publishing a GitHub build does
 not install anything on your Move. Scene lengths currently reset on reload.
+
+## Visual feedback (0.1.1)
+
+Empty scene A launch pads are blue, B purple. The launch row changes to red
+while recording, green while playing, lime while overdubbing, and amber while
+stopped. Pause pads are dim amber, undo purple, delete dim red. Both scenes
+show their own retained layer states; a queued scene pulses on the launch row.
+
+Pressing an empty/stopped layer's launch pad arms it for the next bar of its
+scene. Red/green blinking and WAIT show the queued recording/playback; pressing
+the same pad again or its pause pad cancels the queue. The screen counts down
+the beats to recording. Inactive-scene launches wait for that scene's bar 1.
+
+For a one-bar scene, a white light travels across all 16 bottom steps. For
+longer scenes, the white step marks the current bar, with the screen showing
+bar/length and beat. Click Loop to choose the scene length: all 16 buttons
+remain visible, the selected length is white, and the preceding bars are cyan.
+Use arrows to choose A/B in this view, then click Loop to exit.

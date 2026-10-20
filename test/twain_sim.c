@@ -82,8 +82,41 @@ static void test_scene_grid(void) {
     expect(t,"tstates","2,2,0,0");
     twain_destroy(t);
 }
+static void test_armed_record(void) {
+    twain_t *t=twain_create(NULL,NULL); assert(t);
+    twain_set_param(t,"scene_bars","4");
+    frames(t,128);
+    twain_set_param(t,"a_t1_launch","1");
+    expect(t,"tstates","0,0,0,0");
+    char status[768]; twain_get_param(t,"twain_status",status,sizeof status);
+    assert(strstr(status,"\"armed\":[[1,0,0,0]"));
+    frames(t,88200-128); expect(t,"tstates","1,0,0,0");
+    frames(t,128); expect(t,"tstates","1,0,0,0");
+    twain_set_param(t,"a_t2_launch","1");
+    twain_set_param(t,"a_t2_launch","1"); // second press cancels
+    frames(t,88200); expect(t,"tstates","1,0,0,0");
+    twain_set_param(t,"a_t3_launch","1");
+    twain_set_param(t,"a_t3_stop","1"); // stop cancels countdown
+    frames(t,88200); expect(t,"tstates","1,0,0,0");
+    twain_set_param(t,"b_t1_launch","1"); // inactive scene waits for launch
+    expect(t,"b_tstates","0,0,0,0");
+    twain_set_param(t,"scene","B"); frames(t,88200-128);
+    expect(t,"scene","1"); expect(t,"tstates","1,0,0,0");
+    twain_destroy(t);
+    t=twain_create(NULL,NULL); assert(t);
+    twain_set_param(t,"scene_bars","4");
+    uint8_t start=0xfa,tick=0xf8;
+    twain_on_midi(t,&start,1,3); render(t,1);
+    twain_set_param(t,"a_t1_launch","1");
+    for(int i=0;i<95;i++) { twain_on_midi(t,&tick,1,3); render(t,1); }
+    expect(t,"tstates","0,0,0,0");
+    twain_on_midi(t,&tick,1,3); render(t,1);
+    expect(t,"tstates","1,0,0,0");
+    twain_destroy(t);
+}
 int main(void) {
     test_scene_grid();
+    test_armed_record();
     twain_t *t=twain_create(NULL,NULL); assert(t);
     expect(t,"module_id","twain"); expect(t,"track_seconds","60");
     for (int scene=0;scene<2;scene++) {
