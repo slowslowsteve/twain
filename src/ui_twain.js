@@ -3,6 +3,11 @@
 import { setLED, decodeDelta } from '/data/UserData/schwung/shared/input_filter.mjs';
 import { MoveKnob1, MoveLeft, MoveRight, MoveLoop, Black, BrightRed, Green, White, LightGrey, YellowGreen } from '/data/UserData/schwung/shared/constants.mjs';
 import { announce } from '/data/UserData/schwung/shared/screen_reader.mjs';
+/* The host installs the overtake bridge before evaluating this module.
+ * Pin it: a callback entered from the track editor may temporarily restore
+ * the chain editor's global bridge, which addresses a different DSP. */
+const dspGet = host_module_get_param;
+const dspSet = host_module_set_param;
 let scene = 0;
 let ticks = 0;
 let loopView = false;
@@ -11,10 +16,10 @@ let snapshot = null;
 let forcePaints = 3;
 const BLUE = 33, PURPLE = 22, CYAN = 16, AMBER = 8;
 function select(s) {
-    host_module_set_param('scene', String(s));
+    dspSet('scene', String(s));
 }
 function poll() {
-    const raw = host_module_get_param('twain_status');
+    const raw = dspGet('twain_status');
     if (!raw) return;
     try {
         const next = JSON.parse(raw);
@@ -90,7 +95,7 @@ globalThis.onMidiMessageInternal = function(data) {
         return;
     }
     if (loopView && status === 0x90 && value > 0 && note >= 16 && note <= 31) {
-        host_module_set_param(`${lengthScene ? 'b' : 'a'}_scene_bars`, String(note - 15));
+        dspSet(`${lengthScene ? 'b' : 'a'}_scene_bars`, String(note - 15));
         announce(`Scene ${lengthScene ? 'B' : 'A'}, ${note - 15} bars`);
         refresh();
         return;
@@ -106,16 +111,16 @@ globalThis.onMidiMessageInternal = function(data) {
         select(col < 4 ? 0 : 1);
         const layer = col % 4 + 1;
         const prefix = col < 4 ? 'a_' : 'b_';
-        if (row === 2) host_module_set_param(prefix + 'undo', '1');
-        else host_module_set_param(`${prefix}t${layer}_${['launch','stop','undo','clear'][row]}`, '1');
+        if (row === 2) dspSet(prefix + 'undo', '1');
+        else dspSet(`${prefix}t${layer}_${['launch','stop','undo','clear'][row]}`, '1');
         announce(`Scene ${scene ? 'B' : 'A'}, layer ${layer}`);
         refresh();
     } else if (status === 0xb0 && note >= MoveKnob1 && note < MoveKnob1 + 8) {
         const col = note - MoveKnob1;
         select(col < 4 ? 0 : 1);
         const key = `${col < 4 ? 'a' : 'b'}_t${col % 4 + 1}_level`;
-        const level = Number(host_module_get_param(key)) || 0;
-        host_module_set_param(key, String(Math.max(0, Math.min(200, level + decodeDelta(value)))));
+        const level = Number(dspGet(key)) || 0;
+        dspSet(key, String(Math.max(0, Math.min(200, level + decodeDelta(value)))));
     }
 };
 globalThis.onUnload = function() {};

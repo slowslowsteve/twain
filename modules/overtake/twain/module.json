@@ -2,7 +2,7 @@
   "id": "twain",
   "name": "Twain",
   "abbrev": "TWN",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Two scenes with four independent 60-second loop layers each",
   "dsp": "dsp.so",
   "ui": "ui.js",

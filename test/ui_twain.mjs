@@ -84,3 +84,13 @@ failReads=false; params.set('a_scene_bars','4'); phase=2.3; context.onResume();
 assert(text.includes('TWAIN A Bar 3/4'));
 assert.equal(leds.get(18),3);
 console.log('Twain UI: scene colors, pending blink, bar chase and bounded polling passed');
+
+const realGet=context.host_module_get_param, realSet=context.host_module_set_param;
+context.host_module_get_param=()=>null;
+context.host_module_set_param=()=>{throw new Error('wrong track-editor DSP');};
+context.onResume();
+assert.equal(leds.get(18),3); // retains its own DSP snapshot through host swaps
+context.onMidiMessageInternal([0x90,99,127]);
+assert.deepEqual(writes.at(-1),['b_t4_launch','1']);
+context.host_module_get_param=realGet; context.host_module_set_param=realSet;
+console.log('Twain UI: Tools launch retains overtake bridge across track-editor callback swaps');
