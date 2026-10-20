@@ -143,7 +143,7 @@ void mark_clip_record(mark_t *m, int track, uint32_t frames);
 typedef struct {
     int16_t *audio;
     uint32_t len, full_len;
-    int state, settings[9]; /* level, seven amounts, delay rate */
+    int state, settings[10]; /* level, seven amounts, delay rate, mute */
     double pos, grid;
 } mark_clip_snapshot_t;
 int mark_clip_capture(mark_t *, int, mark_clip_snapshot_t *, int audio);

@@ -1,5 +1,5 @@
 /*
- * Twain overtake build — two scenes, four layers each.
+ * Twain overtake build — four scenes, four layers each.
  *
  * Declares capabilities.audio_in and reads the hardware input directly
  * from the host mailbox (host->mapped_memory + host->audio_in_offset),

@@ -15,7 +15,8 @@ static void render(twain_t *t, int blocks) {
     while (blocks--) twain_process(t,in,out,128);
 }
 static void select_scene(twain_t *t, int scene) {
-    twain_set_param(t,"scene",scene ? "B":"A");
+    char target[2]={(char)('A'+scene),0};
+    twain_set_param(t,"scene",target);
     char buf[32];
     for (int i=0;i<2000;i++) {
         twain_get_param(t,"scene",buf,sizeof buf);
@@ -90,7 +91,7 @@ static void test_armed_record(void) {
     frames(t,128);
     twain_set_param(t,"a_t1_launch","1");
     expect(t,"tstates","0,0,0,0");
-    char status[768]; twain_get_param(t,"twain_status",status,sizeof status);
+    char status[2048]; twain_get_param(t,"twain_status",status,sizeof status);
     assert(strstr(status,"\"armed\":[[1,0,0,0]"));
     frames(t,88200-128); expect(t,"tstates","1,0,0,0");
     frames(t,128); expect(t,"tstates","1,0,0,0");
@@ -235,7 +236,7 @@ static void test_history(void) {
     twain_set_param(t,"a_t1_clear","1");expect(t,"a_t1_delay_rate","6");
     expect(t,"tstates","0,0,0,0");assert(output_sample(t)==0);
     twain_set_param(t,"a_t1_clear","1");expect(t,"a_t1_delay_rate","5");
-    char json[768];twain_get_param(t,"twain_status",json,sizeof json);assert(strstr(json,"\"custom\":[0,0]"));
+    char json[2048];twain_get_param(t,"twain_status",json,sizeof json);assert(strstr(json,"\"custom\":[0,0,0,0]"));
     char count[8];twain_get_param(t,"undo_count",count,sizeof count);
     twain_set_param(t,"a_t1_clear","1");expect(t,"undo_count",count); // no-op doesn't consume history
     twain_set_param(t,"undo","1");expect(t,"a_t1_delay_rate","6");expect(t,"tstates","0,0,0,0");
@@ -261,7 +262,72 @@ static void test_history(void) {
     twain_destroy(t);test_signal=1000;
     puts("Twain: grouped edits, five audio undos, staged delete and replacement recovery passed");
 }
+
+static void test_four_scenes_and_mutes(void) {
+    twain_t *t=twain_create(NULL,NULL);assert(t);
+    char key[32],value[16],before[128],after[128],json[2048];
+    for(int scene=0;scene<4;scene++) {
+        snprintf(key,sizeof key,"%c_scene_bars",'a'+scene);
+        snprintf(value,sizeof value,"%d",scene+1);twain_set_param(t,key,value);
+    }
+    uint8_t start=0xfa,tick=0xf8;twain_on_midi(t,&start,1,3);render(t,1);
+    for(int scene=1;scene<4;scene++) {
+        snprintf(value,sizeof value,"%d",scene);twain_set_param(t,"scene",value);
+        for(int i=1;i<scene*96;i++) { twain_on_midi(t,&tick,1,3);render(t,1); }
+        snprintf(value,sizeof value,"%d",scene-1);expect(t,"scene",value);
+        twain_on_midi(t,&tick,1,3);render(t,1);
+        snprintf(value,sizeof value,"%d",scene);expect(t,"scene",value);
+        expect(t,"track_seconds","60");
+    }
+    // Record all four clips in D and stop them, then queue one simultaneous launch.
+    twain_set_param(t,"quantize","0");
+    for(int clip=1;clip<=4;clip++) { snprintf(key,sizeof key,"t%d_btn",clip);twain_set_param(t,key,"1"); }
+    render(t,80);
+    for(int clip=1;clip<=4;clip++) { snprintf(key,sizeof key,"t%d_btn",clip);twain_set_param(t,key,"1");snprintf(key,sizeof key,"t%d_stop",clip);twain_set_param(t,key,"1"); }
+    expect(t,"tstates","4,4,4,4");
+    for(int clip=1;clip<=4;clip++) { snprintf(key,sizeof key,"d_t%d_clip",clip);twain_set_param(t,key,"1"); }
+    for(int i=0;i<96;i++)twain_on_midi(t,&tick,1,3);
+    render(t,1);expect(t,"tstates","2,2,2,2");
+    twain_get_param(t,"tpos",before,sizeof before);
+    twain_set_param(t,"d_t1_mute","1");
+    twain_get_param(t,"twain_status",json,sizeof json);assert(strstr(json,"\"muted\":[0,0,0,1]"));
+    render(t,25);twain_get_param(t,"tpos",after,sizeof after);assert(strcmp(before,after));
+    expect(t,"tstates","2,2,2,2");expect(t,"d_t1_level","100");
+    twain_set_param(t,"undo","1");expect(t,"d_t1_mute","0");
+    render(t,50);int audible=output_sample(t);assert(audible>100);
+    for(int clip=1;clip<=4;clip++) { snprintf(key,sizeof key,"d_t%d_mute",clip);twain_set_param(t,key,"1"); }
+    render(t,50);assert(abs(output_sample(t))<4);expect(t,"tstates","2,2,2,2");
+    for(int clip=1;clip<=4;clip++) { snprintf(key,sizeof key,"d_t%d_mute",clip);twain_set_param(t,key,"0"); }
+    render(t,50);assert(output_sample(t)>audible*0.9);
+    twain_set_param(t,"master_mute","1");render(t,50);assert(abs(output_sample(t))<4);
+    expect(t,"tstates","2,2,2,2");twain_set_param(t,"undo","1");expect(t,"master_mute","0");
+    render(t,50);assert(output_sample(t)>audible*0.9);
+    twain_set_param(t,"master_edit_begin","1");
+    twain_set_param(t,"master_level","80");twain_set_param(t,"master_level","25");
+    twain_set_param(t,"master_edit_end","1");render(t,50);
+    int reduced=output_sample(t);
+    assert(reduced>audible*0.23 && reduced<audible*0.27);
+    twain_set_param(t,"undo","1");expect(t,"master_level","100");
+    twain_set_param(t,"master_level","oops");expect(t,"master_level","100");
+    twain_set_param(t,"master_level","900");expect(t,"master_level","200");
+    twain_set_param(t,"master_mute","-1");expect(t,"master_mute","0");
+    // First delete retains mute, second resets it; Undo restores the mute.
+    twain_set_param(t,"d_t1_mute","1");twain_set_param(t,"d_t1_clear","1");expect(t,"d_t1_mute","1");
+    twain_set_param(t,"d_t1_clear","1");expect(t,"d_t1_mute","0");
+    twain_set_param(t,"undo","1");expect(t,"d_t1_mute","1");
+    // An inactive C recording waits for scene launch, closes on C's own cycle,
+    // then restores through the global history just like A/B recordings.
+    twain_set_param(t,"c_t1_record","1");expect(t,"c_tstates","0,0,0,0");
+    twain_set_param(t,"scene","C");
+    for(int i=0;i<3*96;i++)twain_on_midi(t,&tick,1,3);
+    render(t,1);expect(t,"scene","2");expect(t,"c_tstates","1,0,0,0");
+    for(int i=0;i<3*96;i++) { twain_on_midi(t,&tick,1,3);render(t,1); }
+    expect(t,"c_tstates","2,0,0,0");twain_set_param(t,"undo","1");expect(t,"c_tstates","0,0,0,0");
+    twain_destroy(t);
+    puts("Twain: four scene boundaries, simultaneous launch, mute transport and master gain passed");
+}
 int main(void) {
+    test_four_scenes_and_mutes();
     test_scene_grid();
     test_history();
     test_clip_workflow();
@@ -271,8 +337,8 @@ int main(void) {
     test_armed_record();
     twain_t *t=twain_create(NULL,NULL); assert(t);
     expect(t,"module_id","twain"); expect(t,"track_seconds","60");
-    for (int scene=0;scene<2;scene++) {
-        test_signal = scene ? 2000 : 1000;
+    for (int scene=0;scene<4;scene++) {
+        test_signal = (scene+1)*1000;
         select_scene(t,scene);
         expect(t,"tstates","0,0,0,0");
         twain_set_param(t,"quantize","0");
@@ -296,5 +362,5 @@ int main(void) {
     twain_process(t,silence,b,128);
     assert(a[254] > 0 && b[254] > a[254]);
     render(t,200); twain_set_param(t,"scene","invalid"); expect(t,"scene","1");
-    twain_destroy(t); puts("Twain: two scenes / eight independent layers passed");
+    twain_destroy(t); puts("Twain: four scenes / sixteen independent clips passed");
 }

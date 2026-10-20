@@ -166,6 +166,9 @@ typedef struct {
     double   pos;          /* 0 .. len */
     int      st;           /* mk_tstate_t */
     int      pending;      /* 0 none, 1 = start record, 2 = start play */
+#ifdef MARK_TWAIN
+    int      clip_muted;
+#endif
     int      level;        /* 0..200, 100 = unity (RC play level) */
     int      pan;          /* 0..100, 50 = center */
     int      rev, shot;
@@ -1524,7 +1527,7 @@ int mark_clip_has_audio(mark_t *m,int ti) {
 }
 int mark_clip_custom(mark_t *m,int ti) {
     mk_track_t *t=&m->t[ti];
-    if(t->level!=100 || t->clipfx.delay_rate!=TW_RATE_DEFAULT)return 1;
+    if(t->clip_muted || t->level!=100 || t->clipfx.delay_rate!=TW_RATE_DEFAULT)return 1;
     for(int i=0;i<7;i++)if(t->clipfx.value[i])return 1;
     return 0;
 }
@@ -1533,7 +1536,7 @@ int mark_clip_capture(mark_t *m,int ti,mark_clip_snapshot_t *s,int audio) {
     mk_track_t *t=&m->t[ti];
     s->settings[0]=t->level;
     for(int i=0;i<7;i++)s->settings[i+1]=t->clipfx.value[i];
-    s->settings[8]=t->clipfx.delay_rate;
+    s->settings[8]=t->clipfx.delay_rate; s->settings[9]=t->clip_muted;
     s->len=t->st==MK_REC ? t->rec_len : t->len;
     s->full_len=t->st==MK_REC ? t->rec_len : t->full_len;
     s->state=t->st==MK_REC ? (s->len?MK_STOP:MK_EMPTY) : t->st;
@@ -1555,7 +1558,7 @@ int mark_clip_restore(mark_t *m,int ti,mark_clip_snapshot_t *s,int audio) {
         t->pos=s->len ? fmod(s->pos,s->len) : 0;
         if(m->grid_unit<=0)m->grid_unit=s->grid;
     }
-    t->level=s->settings[0];
+    t->level=s->settings[0];t->clip_muted=s->settings[9];
     for(int i=0;i<7;i++)t->clipfx.value[i]=s->settings[i+1];
     if(t->clipfx.delay_rate!=s->settings[8]) { t->clipfx.previous_rate=t->clipfx.delay_rate; t->clipfx.rate_mix=0; }
     t->clipfx.delay_rate=s->settings[8]; t->clipfx.dirty=1;
@@ -2276,6 +2279,9 @@ static void process_common(mark_t *m, const int16_t *in, int16_t *out,
                     float l = 0.0f, r = 0.0f;
                     track_fx_run(m, t, &l, &r);
                     float gt = (float)t->level / 100.0f;
+#ifdef MARK_TWAIN
+                    if(t->clip_muted)gt=0;
+#endif
                     t->g_cur += (gt - t->g_cur) * 0.002f;
                     if (rt && rt->out_ch) {
                         m->tmix[i][n] += (l + r) * 0.5f * t->g_cur;
@@ -2288,6 +2294,8 @@ static void process_common(mark_t *m, const int16_t *in, int16_t *out,
                 if (!paused) {
                     float l=0, r=0;
                     twain_fx_run(&t->clipfx,&l,&r,clip_bar);
+                    float target=t->clip_muted?0:t->level/100.0f;
+                    t->g_cur+=(target-t->g_cur)*0.002f;
                     outl+=l*t->g_cur*t->pg[0]; outr+=r*t->g_cur*t->pg[1];
                 }
 #endif
@@ -2327,6 +2335,9 @@ static void process_common(mark_t *m, const int16_t *in, int16_t *out,
                 if (t->fx_on && !t->fx_module[0] && t->fx != TFX_OFF)
                     track_fx_run(m, t, &l, &r);
                 float gt = (float)t->level / 100.0f;
+#ifdef MARK_TWAIN
+                if(t->clip_muted)gt=0;
+#endif
                 t->g_cur += (gt - t->g_cur) * 0.002f;
                 /* Multi mode: this track owns an output jack, so it goes to
                  * its own bus and pan is not applied — there is nowhere to
@@ -2362,6 +2373,9 @@ static void process_common(mark_t *m, const int16_t *in, int16_t *out,
         block_fx[i]->api->process_block(block_fx[i]->instance,
                                         m->fx_block[i], frames);
         float gt = (float)t->level / 100.0f;
+#ifdef MARK_TWAIN
+        if(t->clip_muted)gt=0;
+#endif
         for (int n = 0; n < frames; n++) {
             t->g_cur += (gt - t->g_cur) * 0.002f;
             if (rt && rt->out_ch) {
@@ -2458,6 +2472,9 @@ void mark_set_param(mark_t *m, const char *key, const char *val) {
         if (!strcmp(k, "clear")) { if (trig_active(val)) track_clear(m, ti);  return; }
         if (!strcmp(k, "trim"))  { track_trim(m, ti, atoi(val)); return; }
         if (!strcmp(k, "len16")) { track_setlen16(m, ti, atoi(val)); return; }
+#ifdef MARK_TWAIN
+        if (!strcmp(k,"mute")) { t->clip_muted=clampi(atoi(val),0,1);m->edit_rev++;return; }
+#endif
         if (!strcmp(k, "level")) { t->level = clampi(atoi(val), 0, 200); m->edit_rev++; return; }
         if (!strcmp(k, "pan"))   { t->pan = clampi(atoi(val), 0, 100); update_track_gains(t); m->edit_rev++; return; }
         if (!strcmp(k, "rev")) {
@@ -2663,6 +2680,7 @@ int mark_get_param(mark_t *m, const char *key, char *buf, int buf_len) {
         if(!strcmp(k,"delay_rate"))return snprintf(buf,(size_t)buf_len,"%d",t->clipfx.delay_rate);
         int fx_index=twain_fx_index(k);
         if(fx_index>=0)return snprintf(buf,(size_t)buf_len,"%d",t->clipfx.value[fx_index]);
+        if (!strcmp(k,"mute")) return snprintf(buf,(size_t)buf_len,"%d",t->clip_muted);
 #endif
         if (!strcmp(k, "level")) return snprintf(buf, (size_t)buf_len, "%d", t->level);
         if (!strcmp(k, "pan"))   return snprintf(buf, (size_t)buf_len, "%d", t->pan);

@@ -1,131 +1,127 @@
-# Twain 0.3.1 prototype
+# Twain 0.4.0 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
-and occupies none of Move's four native sound-generator track slots.
+and occupies none of Move's four native sound-generator track slots. It does
+not modify Schwung or its shortcuts.
 
 ## Make music
 
-The first two pad columns are scenes A and B. Each contains four clips from
-top to bottom. The other six columns are deliberately dark.
+The first four pad columns are scenes A, B, C and D. Each contains four clips
+from top to bottom; the other four columns are dark. Only the active scene
+advances. Each clip retains independent audio and settings, with 60 seconds
+of stereo capacity at 44.1 kHz.
 
-- Tap a recorded clip to request play/stop on the next bar. Tap again before
-  the boundary to cancel. Empty clip taps do nothing; taps never overdub.
-- Hold Record and press a clip to arm recording. It starts at that scene's
-  next cycle start and captures its selected length (up to 60 seconds).
-  Recording an existing clip replaces it when the queued recording starts.
-  A queued inactive-scene recording waits until that scene is launched.
-- Hold Delete and press a clip once to clear its audio and queued actions,
-  keeping all clip settings. If the clip is already empty, Delete+pad resets
-  its settings (level 100%, effects off, delay rate 1/8). A further delete on a
-  fully default empty clip is a no-op. Both deletion stages are undoable.
-- Hold a clip and turn Volume to adjust that clip's level (0–200%). Release
-  the pad without launching/stopping it. Volume alone remains Move's master.
-- Hold a clip and turn knobs 1–7 for its HP filter, LP filter, hard compression,
-  saturation, chorus, reverb and tempo-synced eighth-note delay. Zero bypasses
-  an effect; amounts are independent per clip and effects can run together.
-  Knob 8 chooses a quantized delay rate; unheld FX knobs do nothing. Hold a
-  clip and touch a knob to see its value; two separate touches no more than
-  600 ms apart reset it. Turning between touches cancels the tap sequence.
-  Volume resets to 100%, effects to 0%, delay rate to 1/8. These touches do
-  not launch or stop the clip. Saturation uses RMS output compensation
-  with no makeup boost; it is not a guarantee of equal perceived loudness for
-  every signal. Reverb uses a dense, damped stereo tail. Delay amount increases send and
-  repeats together, with feedback capped at 72%. Compression adds up to
-  18 dB automatic makeup gain as its threshold falls.
-- Hold Loop and press bottom step 1–16 to choose that many bars. Left/right
-  (or an A/B clip column) chooses which scene's length to edit. Release Loop
-  to return to playback progress. A and B have independent lengths.
-- Left/right in performance requests scene A/B. Repeating a queued request
-  leaves it queued; choosing the active scene cancels it. Volume and FX never
-  request scene changes. Clip pads address their scene without launching it.
+- Tap recorded clips to queue play/stop at the next bar. Several overlapping
+  pad presses register independently and launch together at the boundary if
+  released before it. A second tap cancels a pending action. Empty taps do
+  nothing; taps never overdub.
+- Hold Record and press clips to queue replacement recording at their scene's
+  next cycle start. Captures use that scene's length, up to 60 seconds. A queued
+  inactive-scene recording waits until its scene is launched.
+- Hold Delete and press a clip to clear audio while keeping its settings.
+  If already empty, Delete+pad resets volume, FX, delay rate and mute. Another
+  delete on a default empty clip does nothing. Both stages are undoable.
+- Hold a clip and turn Volume for its level (0–200%). With several pads held,
+  knob edits address the last pressed clip; other unused pads retain their taps.
+- Volume alone always controls Move's master. Shift+Volume controls Twain's
+  master (0–200%) using the existing host volume-ownership binding. This needs
+  no Schwung patch. Release Shift to return Volume to Move's master. The
+  existing Shift+Volume+jog-click host exit shortcut remains available.
+- Mute alone toggles Twain master mute on release. Mute+clip toggles only that
+  clip's mute; either press order works, and a multi-clip mute chord works too.
+  Neither mute stops transport, changes clip volume, or launches clips.
+- Hold a clip and turn knobs 1–7 for HP filter, LP filter, compression,
+  saturation, chorus, reverb and delay. Knob 8 chooses a quantized delay rate.
+  Unheld FX knobs do nothing. Touch a knob while holding a clip to see its
+  value; two separate touches within 600 ms reset it. Turns cancel the tap
+  sequence. Effects reset to zero, volume to 100%, delay rate to 1/8.
+- Hold Loop and press bottom step 1–16 to select scene length. While Loop is
+  held, a clip column selects the scene to edit, or use Left/Right. Release
+  Loop to return to normal performance. All four scene lengths are independent.
+- Left/Right in performance moves the requested scene through A–D. Further
+  presses move the queued destination; returning to the active scene cancels
+  the switch. Stops at A/D rather than wrapping. Clip taps do not switch scenes.
 
 The current scene finishes its full cycle before switching; the destination
-starts from bar 1 with clip playheads at the beginning. Short clips repeat
-within the scene. MIDI clock uses 96 ticks/bar and changes at the render block
-receiving the boundary. Without clock, the host tempo drives sample-accurate
-bar boundaries. Stop pauses transport; Start/Continue restart at bar 1.
+starts from bar 1 with clip playheads reset. Short clips repeat within a scene.
+MIDI clock uses 96 ticks/bar; without it, host tempo drives sample-accurate
+boundaries. Stop pauses transport; Start/Continue restart at bar 1.
 
-## Visible controls
+## Screen and pads
 
-Default empty clips are neutral dim pads. Empty clips retaining customized
-settings are subtly blue in A or purple in B. Recording is red, playing green,
-stopped amber. Queued recording blinks red, queued start green and queued stop
-amber. Only the queued scene pulses. Held clips turn white for volume/FX edits.
-The screen shows clip/effect/value while editing, scene lengths A/B and the
-current Bar 1/16, 2/16, etc. The bottom steps travel within a one-bar scene,
-or mark the current bar for longer scenes. Loop glows dimly when available,
-bright while held; Record and Delete show their modifier state. A periodic
-LED refresh repairs a surface overwritten by native Move feedback.
+The top shows the active scene and Bar 3/8, followed by all four scene lengths.
+The middle shows recording, queued recording/scene, or the parameter being
+adjusted. Twain master volume or a persistent TWAIN MUTED indicator appears
+above a bottom progress strip. Each outlined segment is one bar, filling
+through that bar's beats; even a one-bar scene has visible beat progress.
+There are no permanent instruction rows. Bottom hardware steps still follow
+the bar/beat and select length while Loop is held.
 
-Volume gestures require Schwung's `shadow_set_overtake_suppress_master_volume`
-binding. If unavailable, Twain displays "Host: no clip Volume" and refuses
-the clip-volume edit; master volume is never reinjected or doubled. The bridge
-is described in Schwung's official `src/shadow/shadow_ui.c` bindings. Hardware
-verification is still required for Volume ownership and LED reliability.
+Empty pads are dim neutral; empty clips with retained settings have a subtle
+scene tint. Recording is red, playing green, stopped amber, and muted clips
+are light grey. Queued actions blink; the queued scene pulses. Held pads turn
+white. Loop, Record, Delete, Undo and Mute indicate their availability/state.
+A periodic LED refresh repairs native feedback overwrites. Parked Twain skips
+screen work and releases stale held-pad/volume gestures.
 
-## Undo and delay rates
+Volume gestures require `shadow_set_overtake_suppress_master_volume`, present
+in the inspected installed host. Without it, Twain reports that the volume
+edit is unavailable. Physical Volume ownership, pad chords, the new screen
+and LED reliability still require a hardware pass.
 
-The native Undo button reverses the last five edits across both scenes:
-recording/replacing audio, deleting audio, resetting clip settings, parameter
-changes, and scene lengths. A held-pad volume/FX gesture is one undo step,
-even across several knobs. Play/stop/scene launch taps are performance controls
-and don't fill history. A sixth edit drops the oldest. There is no redo yet.
-Undo restores retained audio and control values, not the internal FX tail state;
-if deleting a recording in progress, its partial take restores as stopped audio.
-The button glows when history is available, and the screen shows remaining steps.
+## Effects and undo
 
-Five spare full-capacity audio buffers are reserved at initialization. Destructive
-edits swap buffer ownership into history instead of copying megabytes on render.
-No history allocation or audio file access occurs on the render thread.
+Reverb uses eight damped parallel combs and four serial allpass diffusers per
+channel for a denser tail on percussion. Delay amount increases both send and
+feedback, capped at 72%; the feedback loop is damped and all repeats decay.
+Compression blends hard-knee 12:1 compression with up to 18 dB automatic makeup.
+Saturation has RMS compensation without makeup gain. All effects are per clip;
+sound quality and CPU with four fully effected clips need listening on Move.
 
-Knob 8 rates, shortest-to-longest when turning counterclockwise:
+Knob 8 rates, shortest to longest counterclockwise:
 1/64, 1/32T, 1/32, 1/16T, 1/16, 1/8T, 1/8 (default), 1/4T, 1/4,
-1/2T, 1/2, 1/1. T means triplet: e.g. 1/2T = 1/3 of a bar and
-1/8T = 1/12. The display names every rate. Changes crossfade between fixed
-quantized read taps over 20 ms. The delay buffer holds up to 12 seconds,
-supporting a full bar down to 20 BPM.
+1/2T, 1/2, 1/1. T means triplet (1/8T is 1/12 of a bar). Rate changes
+crossfade over 20 ms. The delay buffer supports a full bar down to 20 BPM.
 
-## Current limits
+Undo reverses five edits across all four scenes: audio replacement/deletion,
+settings reset, volume/FX edits, mutes, master controls and scene lengths.
+A held-pad editing gesture is one step; Shift-held master-volume turns are
+one step too. Playback/scene requests do not fill history. There is no redo.
+Undo restores audio and control values, not FX tail memory. Five preallocated
+60-second spare buffers swap ownership instead of copying audio on render.
 
-Two scenes, four independent stereo clips each, 60 seconds/clip at 44.1 kHz.
-Initialization fails rather than shortening storage. Buffers allocate at
-creation; the render path performs no allocation or file I/O. FX memory adds
-roughly 35 MB to the approximately 106 MB loop storage budget; five undo
-buffers add another 53 MB. Total audio/FX storage is about 194 MB. Four active
-clips with all seven effects still need CPU and listening checks on Move.
+## Saving investigation and limits
 
-Audio, undo history and Twain scene-length/FX settings currently live in memory and are lost
-on restart. Inherited Mark session endpoints are not exposed as a Twain save
-workflow; do not rely on them to persist this new clip/FX state. There is no
-crossfade or time stretch. Longer, slower scenes can exceed 60 seconds: a clip
-recording then stops at the capacity limit. Direct resume via Shift+hold step
-13 depends on Schwung's host shortcut handling; this package doesn't modify it.
-On the inspected host, Back parks Twain with audio intact; holding Shift and
-touching Volume while double-tapping step button 13 invokes direct resume
-(the two Tools requests must be close together). This alternative still needs
-a physical test; step 13 is a bottom step button, not a top encoder.
+**Twain does not yet save or restore with Move projects. Restart loses its
+recordings, scene lengths, FX, volumes and mutes.** Undo is also RAM-only.
+No separate global workspace or manual project/slot workflow was substituted.
+
+The installed Schwung source exposes project identity (`active_set` and model
+generations) and host-owned `set_state/<uuid>` handling. Its slot autosave and
+shutdown/set-change saves do not include this overtake module's audio.
+Twain's inherited Mark session endpoints are not an integrated Twain save
+format. A reliable implementation would need worker-side audio snapshots,
+atomic whole-project commits/restores, and verified handling of changing,
+unsaved and duplicated Move projects. Those have not been established by this
+investigation, so automatic project saving is not claimed or enabled. Schwung
+has not been patched. The abandoned shortcut-patch preparation script was removed.
+
+All audio, FX and undo storage reserves about 326 MiB (341,741,280 bytes in
+the measured native build), excluding host/runtime overhead. Allocation fails
+rather than shortening the 60-second capacity. Four native generators remain
+available. Only four Twain clips render at once; inactive scenes retain audio.
+Render performs no allocation or file I/O. No time stretch or scene crossfade.
 
 ## Build and install
 
-- `make test`: Mark regressions, Twain transport/clip/audio-FX and gesture tests.
-- `make twain`: native-host DSP and staged UI/manifest, not a Move binary.
-- `make twain-sanitize`: Twain simulator under ASan and UBSan.
-- `make twain-arm`: Docker ARM build, separate `build/twain-module.tar.gz`.
+- `make test`: Mark regressions, Twain engine and UI gesture tests.
+- `make twain-sanitize`: Twain simulator under ASan/UBSan.
+- `make twain`: native-host build, not a Move binary.
+- `make twain-arm`: separate ARM64 `build/twain-module.tar.gz`.
 
-Every push to `twain-prototype` runs **Twain test package** in GitHub Actions.
-Download **Twain-Move-test-package** from a successful run and unzip the download
-to obtain `twain-module.tar.gz`; keep that tar.gz intact. In Schwung Manager
-at `http://move.local:7700`, choose **Install Custom Module** and upload it.
-Restart Move when the manager requests it; restart discards unsaved Twain audio.
-Launch Twain via Tools or the overtake menu. No build step deploys to Move.
-
-## Optional host shortcut patch (not part of the Twain archive)
-
-`scripts/prepare-twain-shortcut.py SOURCE OUTPUT` patches a local copy of
-Schwung's installed `shadow_ui.js`. It refuses unknown resume guards and never
-connects to Move. With that host change installed, one Tools shortcut resumes
-Twain when it was the last parked tool; other tools retain their existing
-shortcut behavior. Back must park Twain first. This prepares the change only:
-a Twain module update cannot install a host patch. The patch has not been
-installed or verified on hardware.
+Pushes to `twain-prototype` run **Twain test package** on GitHub. Download
+**Twain-Move-test-package**, unzip it and keep `twain-module.tar.gz` intact.
+In Schwung Manager at http://move.local:7700 choose **Install Custom Module**
+and upload that tar.gz. Restart when requested; this discards unsaved audio.
+Launch through the existing Tools/overtake menu. Builds never deploy to Move.
