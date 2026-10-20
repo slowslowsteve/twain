@@ -43,8 +43,13 @@
 #endif
 
 /* Allocation fallback ladder: first capacity that calloc grants wins. */
+#ifdef MARK_REQUIRE_FULL_CAPACITY
+static const int alloc_seconds[] = { MARK_MAX_SECONDS };
+#define ALLOC_STEPS 1
+#else
 static const int alloc_seconds[] = { MARK_MAX_SECONDS, 45, 30, 20, 15 };
 #define ALLOC_STEPS 5
+#endif
 
 /* Incremental undo-swap budget per 128-frame block. 32768 frames is ~0.5 MB
  * of traffic — comfortably inside the render budget, and a full 60 s swap
@@ -546,6 +551,10 @@ static mk_track_t *base_playing(mark_t *m) {
         if (m->t[i].len > 0 && (m->t[i].st == MK_PLAY || m->t[i].st == MK_DUB))
             return &m->t[i];
     return NULL;
+}
+
+double mark_scene_bar_frames(const mark_t *m) {
+    return frames_per_measure(m);
 }
 
 static int any_content(const mark_t *m) {
@@ -1420,6 +1429,23 @@ static void track_trim(mark_t *m, int ti, int delta) {
     if (m->undo_track == ti) reset_undo(m);   /* indexes tied to old len */
     t->len = nl;
     if (t->pos >= (double)nl) t->pos = fmod(t->pos, (double)nl);
+    m->edit_rev++;
+}
+
+/* Close the outgoing performance gesture and put each retained loop at
+ * its beginning. Called at scene-cycle boundaries, never allocates. */
+void mark_scene_cycle(mark_t *m) {
+    if (m->io_busy) return;
+    for (int i = 0; i < MARK_TRACKS; i++) {
+        mk_track_t *t = &m->t[i];
+        if (t->st == MK_REC && t->rec_len)
+            finalize_record(m, i, t->rec_len, MK_PLAY);
+        if (t->st == MK_DUB) {
+            end_dub_capture(m, i);
+            t->st = MK_PLAY;
+        }
+        t->pos = 0.0;
+    }
     m->edit_rev++;
 }
 

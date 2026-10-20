@@ -1,0 +1,19 @@
+{
+  "id": "twain",
+  "name": "Twain",
+  "abbrev": "TWN",
+  "version": "0.1.0",
+  "description": "Two scenes with four independent 60-second loop layers each",
+  "dsp": "dsp.so",
+  "ui": "ui.js",
+  "api_version": 2,
+  "component_type": "overtake",
+  "capabilities": {
+    "audio_in": true,
+    "suspend_keeps_js": true,
+    "button_passthrough": [
+      85
+    ]
+  },
+  "author": "timncox"
+}

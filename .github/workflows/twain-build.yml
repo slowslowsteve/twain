@@ -1,0 +1,68 @@
+name: Twain test package
+
+on:
+  push:
+    branches: [twain-prototype]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/twain*'
+      - 'src/ui_twain.js'
+      - 'src/mark_core.*'
+      - 'test/*'
+      - 'modules/overtake/twain/**'
+      - 'scripts/build-twain.sh'
+      - 'Makefile'
+      - '.github/workflows/twain-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: twain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test Mark and Twain
+        run: make test
+      - name: Check Twain with sanitizers
+        run: make twain-sanitize
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1
+      - name: Validate Twain UI and manifest
+        run: |
+          node --input-type=module --check < src/ui_twain.js
+          python3 -m json.tool modules/overtake/twain/module.json >/dev/null
+          bash -n scripts/build-twain.sh
+      - name: Build and validate Move package
+        run: make twain-arm
+      - name: Save installable Twain package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Twain-Move-test-package
+          path: build/twain-module.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+      - name: Installation instructions
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'INSTRUCTIONS'
+          ## Twain prototype package
+          1. Download **Twain-Move-test-package** from this run's Artifacts section.
+          2. Unzip the download to obtain **twain-module.tar.gz**. Keep that tar.gz intact.
+          3. When ready to test on Move, open Schwung Manager at http://move.local:7700.
+          4. Choose **Install Custom Module** and upload **twain-module.tar.gz**.
+          5. Rescan modules if needed, then launch **Twain** from the overtake menu.
+
+          Twain is a separate prototype. This workflow does not install anything on Move
+          and does not publish or replace Mark's catalog release.
+          INSTRUCTIONS
