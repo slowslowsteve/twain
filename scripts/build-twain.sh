@@ -23,6 +23,7 @@ rm -rf build/modules/overtake/twain
 mkdir -p build/modules/overtake/twain
 cp modules/overtake/twain/module.json build/modules/overtake/twain/
 cp src/ui_twain.js build/modules/overtake/twain/ui.js
+cp src/twain_projects.mjs src/twain_project_identity.mjs build/modules/overtake/twain/
 
 # Compile AND tar inside the container: macOS bsdtar embeds AppleDouble
 # (._*) xattr entries that Linux tar extracts as real files — the schwung
@@ -40,7 +41,7 @@ docker run --rm -v "$PWD":/w -w /w "$IMAGE" bash -c "
     tar -tzf build/twain-module.tar.gz
 "
 
-for member in twain/module.json twain/dsp.so twain/ui.js; do
+for member in twain/module.json twain/dsp.so twain/ui.js twain/twain_projects.mjs twain/twain_project_identity.mjs; do
     tar -tzf build/twain-module.tar.gz "$member" >/dev/null
 done
 if tar -tzf build/twain-module.tar.gz | grep -Eq '(^|/)(\._|\.DS_Store)'; then

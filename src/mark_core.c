@@ -1522,6 +1522,26 @@ void mark_clip_record(mark_t *m, int ti, uint32_t frames) {
 }
 
 #ifdef MARK_TWAIN
+int mark_project_safe(mark_t *m) {
+    if(m->io_busy || m->swap_track>=0)return 0;
+    for(int i=0;i<MARK_TRACKS;i++)
+        if(m->t[i].st==MK_REC || m->t[i].st==MK_DUB || m->t[i].pending)return 0;
+    return 1;
+}
+int16_t *mark_project_buffer(mark_t *m,int i) { return m->t[i].buf; }
+int mark_project_export(mark_t *m,int i,mark_clip_snapshot_t *s) {
+    if(!mark_project_safe(m) || !mark_clip_capture(m,i,s,0))return 0;
+    s->audio=m->t[i].buf;return 1; /* borrowed, never transfer ownership */
+}
+int mark_project_import(mark_t *m,int i,const mark_clip_snapshot_t *s) {
+    if(s->len>s->full_len || s->full_len>m->track_frames ||
+       !isfinite(s->grid) || s->grid<0 || s->grid>MARK_SR*60.0)return 0;
+    if(!mark_clip_restore(m,i,(mark_clip_snapshot_t *)s,0))return 0;
+    mk_track_t *t=&m->t[i];
+    t->len=s->len;t->full_len=s->full_len;t->st=s->len?MK_STOP:MK_EMPTY;t->pos=0;
+    t->g_cur=t->clip_muted?0:t->level/100.0f;m->grid_unit=s->grid;
+    return 1;
+}
 int mark_clip_has_audio(mark_t *m,int ti) {
     return m->t[ti].len>0 || m->t[ti].rec_len>0;
 }

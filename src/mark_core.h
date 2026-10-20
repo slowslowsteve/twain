@@ -150,6 +150,12 @@ int mark_clip_capture(mark_t *, int, mark_clip_snapshot_t *, int audio);
 int mark_clip_restore(mark_t *, int, mark_clip_snapshot_t *, int audio);
 int mark_clip_has_audio(mark_t *, int);
 int mark_clip_custom(mark_t *, int);
+/* Export borrows stable buffers with mutation held by Twain. Workers read
+ * those buffers; imported engines stay private until verification completes. */
+int mark_project_safe(mark_t *);
+int mark_project_export(mark_t *, int, mark_clip_snapshot_t *);
+int16_t *mark_project_buffer(mark_t *, int);
+int mark_project_import(mark_t *, int, const mark_clip_snapshot_t *);
 #endif
 
 void mark_on_midi(mark_t *m, const uint8_t *msg, int len, int source);

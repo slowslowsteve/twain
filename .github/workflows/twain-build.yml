@@ -42,6 +42,8 @@ jobs:
       - name: Validate Twain UI and manifest
         run: |
           node --input-type=module --check < src/ui_twain.js
+          node --check src/twain_projects.mjs
+          node --check src/twain_project_identity.mjs
           python3 -m json.tool modules/overtake/twain/module.json >/dev/null
           bash -n scripts/build-twain.sh
       - name: Build and validate Move package

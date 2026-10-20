@@ -1,0 +1,115 @@
+/* Project selection and confirmations; no file I/O and no audio ownership here. */
+import {probeProjectIdentity} from './twain_project_identity.mjs';
+const errors=['','No Twain save yet','Save damaged or unsupported','Disk operation failed','Not enough memory','Move project changed','Finish recording first','Save Move project first'];
+export function createProjectController({get,set,probe=probeProjectIdentity,notice=()=>{}}) {
+    let status=null,live=null,mode='identity',action=null,choices=[],selection=0;
+    let message='Waiting for Move',copy=null,failedAction=null,seenLive='',replace='',kept='',lastCheck=-Infinity;
+    const readStatus=()=>{
+        try { const s=JSON.parse(get('project_status'));if(s && typeof s.id==='string')status=s; }
+        catch (_) {}
+        return status;
+    };
+    function request(key,value,kind) {
+        set(key,value);action={kind,target:live?.id || '',source:value};mode='busy';message=kind.startsWith('save')?'Saving Twain...':kind==='catalog'?'Reading saves...':'Loading Twain...';
+        readStatus();
+    }
+    function load() { request('project_load',live.id,'load'); }
+    function keep() { kept=live?.id || '';mode='kept';action=null;replace=''; }
+    function chooseSource() {
+        choices=[{name:'Start empty',id:null}];
+        const count=Math.min(64,Number(get('project_catalog_count')) || 0);
+        for(let i=0;i<count;i++) {
+            const [id,name]=String(get(`project_catalog_${i}`) || '').split('\t');
+            if(id && id!==live?.id)choices.push({id,name:name || id.slice(0,8)});
+        }
+        choices.push({name:'Cancel',id:'cancel'});selection=0;mode='source';
+    }
+    function evaluate() {
+        if(!status || !live || action)return;
+        if(status.id===live.id) { kept='';replace='';mode='performance';return; }
+        if(kept===live.id) { mode='kept';return; }
+        if(status.dirty && replace!==live.id) { mode='unsaved';selection=0;return; }
+        load();
+    }
+    function finish() {
+        const done=action;action=null;
+        if(status.result) {
+            if(done.kind==='load' && status.result===1) { request('project_catalog','1','catalog');return; }
+            if(status.result===5) { mode='identity';return; }
+            failedAction=done;mode='error';message=errors[status.result] || 'Project operation failed';selection=0;return;
+        }
+        if(done.kind==='catalog') { chooseSource();return; }
+        if(done.kind==='save' || done.kind==='saveSwitch') {
+            notice(status.dirty?'Changed during save':'Twain saved');
+            if(done.kind==='saveSwitch' && live && !status.dirty) { replace=live.id;load();return; }
+        }
+        mode='performance';replace='';evaluate();
+    }
+    function tick(force=false) {
+        if(!force && Date.now()-lastCheck<500)return;
+        lastCheck=Date.now();readStatus();
+        const current=probe();
+        if(current.ready) {
+            live=current;
+            const signature=`${live.id}\n${live.generation}\n${live.name}`;
+            if(signature!==seenLive) { set('project_live',signature);seenLive=signature; }
+        } else {
+            live=null;
+            if(seenLive!=='') { set('project_live','');seenLive=''; }
+            if(!action) { mode='identity';message=current.reason?.includes('persistent')?'Save Move project first':'Waiting for Move'; }
+        }
+        if(action && status && !status.busy)finish();
+        if(!action && live && (mode==='identity'||mode==='performance'||mode==='kept'))evaluate();
+        // A native switch also invalidates source/confirmation menus for the previous target.
+        if(live && ['source','copy','unsaved','error'].includes(mode) && targetId && targetId!==live.id) {
+            replace='';kept='';mode='identity';evaluate();
+        }
+        if(live)targetId=live.id;
+    }
+    let targetId='';
+    function click() {
+        const previousTarget=targetId;
+        tick(true);if(!status || !live || status.busy || (previousTarget && previousTarget!==targetId))return;
+        if(mode==='performance') {
+            if(status.dirty)request('project_save','1','save');else notice('Twain saved');
+        } else if(mode==='unsaved') {
+            if(selection===0)request('project_save','1','saveSwitch');
+            else if(selection===1) { replace=live.id;load(); }
+            else keep();
+        } else if(mode==='source') {
+            copy=choices[selection];
+            if(copy.id==='cancel')keep();
+            else if(copy.id===null)request('project_new','1','new');
+            else { mode='copy';selection=0; }
+        } else if(mode==='copy') {
+            if(selection===0)request('project_load',copy.id,'copy');
+            else { mode='source';selection=0; }
+        } else if(mode==='error') {
+            if(selection===0) {
+                if(failedAction?.kind.startsWith('save'))request('project_save','1',failedAction.kind);
+                else if(failedAction?.kind==='copy')request('project_load',failedAction.source,'copy');
+                else { replace=live.id;load(); }
+            }else keep();
+        } else if(mode==='kept') { kept='';mode='identity';evaluate(); }
+    }
+    function move(delta) {
+        if(!delta)return;
+        const count=mode==='unsaved'?3:mode==='source'?choices.length:mode==='copy'||mode==='error'?2:0;
+        if(count)selection=Math.max(0,Math.min(count-1,selection+(delta>0?1:-1)));
+    }
+    function view() {
+        const currentName=live?.name || get('project_name') || 'Twain';
+        let title=currentName,detail='',choice='';
+        if(mode==='unsaved') { title='Unsaved Twain';detail=get('project_name') || 'Previous project';choice=['Save then switch','Discard and switch','Cancel'][selection]; }
+        else if(mode==='source') { detail='No Twain save. Choose:';choice=choices[selection]?.name || ''; }
+        else if(mode==='copy') { title='Copy Twain from';detail=copy.name;choice=['Copy into this set','Cancel'][selection]; }
+        else if(mode==='busy'||mode==='identity')detail=message;
+        else if(mode==='error') { title='Twain kept intact';detail=message;choice=[failedAction?.kind.startsWith('save')?'Retry save':'Retry project load','Cancel'][selection]; }
+        else if(mode==='kept') { title='Previous Twain kept';detail='Reopen its Move set';choice='Click to switch'; }
+        return {title,detail,choice,mode};
+    }
+    return {tick,click,move,view,
+        guard(){tick(true);return mode==='performance' && !!live && status?.id===live.id && !status.busy;},
+        get modal(){return mode!=='performance';},get busy(){return mode==='busy';},
+        get dirty(){return !!status?.dirty;},get name(){return live?.name || 'Twain';}};
+}

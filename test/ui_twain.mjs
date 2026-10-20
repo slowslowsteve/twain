@@ -8,7 +8,7 @@ const params=new Map();
 const state={scene:0,pending:-1,bars:[1,4,2,8],phase:0,stopped:0,custom:[0,0,0,0],muted:[0,0,0,0],master:100,master_mute:0,undo:0,
  a:'0,1,2,4|0,0,0,0|0,0,0,0|0|0',b:'4,0,2,0|0,0,0,0|0,0,0,0|0|0',c:'0,0,0,0|0,0,0,0',d:'0,0,0,0|0,0,0,0',armed:Array.from({length:4},()=>[0,0,0,0])};
 const constants={MoveKnob1:71,MoveMaster:79,MoveRec:86,MoveDelete:119,MoveLeft:62,MoveRight:63,
- MoveLoop:58,MoveUndo:56,MoveShift:49,MoveMute:88,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
+ MoveLoop:58,MoveUndo:56,MoveMainKnob:14,MoveMainButton:3,MoveShift:49,MoveMute:88,Black:0,BrightRed:1,Green:126,White:120,LightGrey:118};
 class FakeDate extends Date {static now(){return now;}}
 const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_master_volume:v=>claims.push(v),
  host_module_set_param(k,v){writes.push([k,v]);params.set(k,v);if(k==='scene')state.pending=Number(v)===state.scene?-1:Number(v);if(k.endsWith('scene_bars'))state.bars['abcd'.indexOf(k[0])]=Number(v);},
@@ -17,7 +17,7 @@ const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_maste
 });
 const module=new vm.SourceTextModule(fs.readFileSync('src/ui_twain.js','utf8'),{context});
 await module.link(async spec=>{
- const vals=spec.includes('constants')?constants:spec.includes('input_filter')?
+ const vals=spec.includes('twain_projects')?{createProjectController:()=>({tick(){},click(){},move(){},guard:()=>true,modal:false,dirty:false,name:'Test project'})}:spec.includes('constants')?constants:spec.includes('input_filter')?
  {setLED:(n,c)=>leds.set(n,c),setButtonLED:(n,c)=>buttons.set(n,c),decodeDelta:v=>v<64?v:v-128}:{announce(){}};
  return new vm.SyntheticModule(Object.keys(vals),function(){for(const[k,v]of Object.entries(vals))this.setExport(k,v);},{context});
 });

@@ -1,9 +1,11 @@
 /* Four vertical clip columns: scenes A–D, four layers each. */
 import { setLED, setButtonLED, decodeDelta } from '/data/UserData/schwung/shared/input_filter.mjs';
-import { MoveKnob1, MoveMaster, MoveRec, MoveDelete, MoveUndo, MoveLeft, MoveRight, MoveLoop, MoveShift, MoveMute,
+import { MoveKnob1, MoveMaster, MoveRec, MoveDelete, MoveUndo, MoveLeft, MoveRight, MoveLoop, MoveShift, MoveMute, MoveMainKnob, MoveMainButton,
     Black, BrightRed, Green, White, LightGrey } from '/data/UserData/schwung/shared/constants.mjs';
+import { createProjectController } from './twain_projects.mjs';
 import { announce } from '/data/UserData/schwung/shared/screen_reader.mjs';
 const dspGet=host_module_get_param, dspSet=host_module_set_param;
+const projects=createProjectController({get:dspGet,set:dspSet,notice:text=>notice(text)});
 const FX=['hp','lp','comp','sat','chorus','reverb','delay','delay_rate'];
 const FX_NAMES=['HP filter','LP filter','Compression','Saturation','Chorus','Reverb','Delay','Delay rate'];
 const RATES=['1/1','1/2','1/2T','1/4','1/4T','1/8','1/8T','1/16','1/16T','1/32','1/32T','1/64'];
@@ -43,11 +45,20 @@ function paint() {
     setButtonLED(MoveUndo,snapshot && snapshot.undo>0?124:16,force);
     clear_screen();
     if(!snapshot) { print(2,2,'TWAIN connecting...',1); return; }
+    if(projects.modal) {
+        for(let i=68;i<=99;i++)setLED(i,Black,force);
+        for(let i=16;i<=31;i++)setLED(i,Black,force);
+        const v=projects.view();
+        print(2,2,v.title.slice(0,20),1);print(2,20,v.detail.slice(0,20),1);
+        if(v.choice) { print(2,37,`< ${v.choice.slice(0,17)} >`,1);print(2,54,'Press main knob',1); }
+        return;
+    }
+    if(projects.dirty)print(118,2,'*',1);
     const s=loop?editScene:snapshot.scene, bars=snapshot.bars[s];
     const phase=Math.max(0,Math.min(snapshot.phase,snapshot.bars[snapshot.scene]-0.0001));
     const bar=Math.floor(phase)+1, beat=Math.floor((phase%1)*4)+1;
     print(2,2,loop?`Set ${label(s)}: ${bars} bars`:`${label(snapshot.scene)} Bar ${bar}/${snapshot.bars[snapshot.scene]}`,1);
-    print(2,14,snapshot.bars.map((v,i)=>`${label(i)}:${v}`).join(' '),1);
+    print(2,14,projects.name.slice(0,20),1);
     if(now<overlayUntil) print(2,28,overlay,1);
     else if(snapshot.stopped) print(2,28,'Stopped',1);
     else if(snapshot.pending>=0) print(2,28,`Next ${label(snapshot.pending)} at end`,1);
@@ -152,16 +163,29 @@ function muteClip(clip) {
     dspSet(key(clip,'mute'),next);
     notice(`${label(clip.scene)}${clip.track+1} ${next==='1'?'muted':'unmuted'}`);
 }
-globalThis.init=refresh;
-globalThis.onResume=function() { endEdit();endMasterEdit(); pressed.clear();held=null;shift=mute=muteUsed=false; claimVolume(false); rec=del=loop=false; lastForce=-10000; refresh(); };
+globalThis.init=function(){projects.tick(true);refresh();};
+globalThis.onResume=function() { endEdit();endMasterEdit(); pressed.clear();held=null;shift=mute=muteUsed=false; claimVolume(false); rec=del=loop=false; lastForce=-10000;projects.tick(true); refresh(); };
 globalThis.tick=function() {
     if(globalThis.overtakeParked && (pressed.size || shift || mute)) {
         endEdit();endMasterEdit();pressed.clear();held=null;shift=mute=muteUsed=false;claimVolume(false);
     }
+    projects.tick();
+    if(projects.modal && (held || shift)) { endEdit();endMasterEdit();pressed.clear();held=null;shift=false;claimVolume(false); }
     if(++ticks%2===0)poll();paint();
 };
 globalThis.onMidiMessageInternal=function(data) {
     const type=data[0]&0xf0, note=data[1], value=data[2];
+    if(type!==0x90 && type!==0x80 && type!==0xb0)return;
+    if(type===0xb0 && note===MoveMainKnob) { projects.move(decodeDelta(value));paint();return; }
+    if(type===0xb0 && note===MoveMainButton && value>0) {
+        endEdit();endMasterEdit();for(const clip of pressed.values())clip.used=true;
+        projects.click();refresh();return;
+    }
+    const release=type===0x80 || (type===0x90 && value===0) || (type===0xb0 && value===0);
+    const nativeVolume=type===0xb0 && note===MoveMaster && !held && !shift;
+    if(!release && !nativeVolume && !projects.guard()) {
+        endEdit();endMasterEdit();pressed.clear();held=null;shift=false;claimVolume(false);paint();return;
+    }
     if((type===0x90 || type===0x80) && note<=8) {
         const down=type===0x90 && value>=64;
         if(note===8 && shift && down) {

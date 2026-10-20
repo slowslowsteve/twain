@@ -8,6 +8,7 @@
 #if MARK_TRACKS != 4 || MARK_MAX_SECONDS != 60 || !defined(MARK_REQUIRE_FULL_CAPACITY)
 #error Twain requires four 60-second layers per scene
 #endif
+#include "twain_project_io.h"
 #define TW_HISTORY 5
 #define TW_SCENES 4
 static const char *clip_settings[10]={"level","hp","lp","comp","sat","chorus","reverb","delay","delay_rate","mute"};
@@ -15,7 +16,9 @@ typedef struct {
     int scene, clip, kind, bars; /* 0 settings, 1 audio+settings, 2 length, 3 master level, 4 master mute */
     mark_clip_snapshot_t saved;
 } twain_edit_t;
-struct twain { mark_t *scene[TW_SCENES]; int active; int pending; int bars[TW_SCENES]; double phase;
+struct twain {
+    const host_api_v1_t *host; char module_dir[512]; tw_project_io io;
+    mark_t *scene[TW_SCENES]; int active; int pending; int bars[TW_SCENES]; double phase;
     int clock_running, clock_ticks, cycle_due, transport_stopped, bar_due;
     int armed[TW_SCENES][4];
     int master_level, master_mute, master_editing, master_saved; float master_gain;
@@ -26,6 +29,7 @@ struct twain { mark_t *scene[TW_SCENES]; int active; int pending; int bars[TW_SC
 twain_t *twain_create(const host_api_v1_t *host, const char *dir) {
     twain_t *t = calloc(1, sizeof(*t));
     if (!t) return NULL;
+    t->host=host;snprintf(t->module_dir,sizeof t->module_dir,"%s",dir?dir:"");
     t->gesture_scene=t->gesture_clip=-1;
     t->pending = -1;
     t->master_level=100; t->master_gain=1;
@@ -42,10 +46,12 @@ twain_t *twain_create(const host_api_v1_t *host, const char *dir) {
         t->history[i].saved.audio=calloc((size_t)MARK_SR*60*MARK_CH,sizeof(int16_t));
         if(!t->history[i].saved.audio) { twain_destroy(t); return NULL; }
     }
+    if(!tw_io_init(t)) { twain_destroy(t);return NULL; }
     return t;
 }
 void twain_destroy(twain_t *t) {
     if (!t) return;
+    tw_io_destroy(t);
     for (int i = 0; i < TW_SCENES; i++) if (t->scene[i]) mark_destroy(t->scene[i]);
     for(int i=0;i<TW_HISTORY;i++)free(t->history[i].saved.audio);
     free(t);
@@ -53,6 +59,7 @@ void twain_destroy(twain_t *t) {
 static int remember(twain_t *t,int scene,int clip,int kind) {
     twain_edit_t *edit=&t->history[t->history_head];
     if(kind<2 && !mark_clip_capture(t->scene[scene],clip,&edit->saved,kind==1))return 0;
+    t->io.revision++;
     edit->scene=scene; edit->clip=clip; edit->kind=kind; edit->bars=kind==3?t->master_level:kind==4?t->master_mute:t->bars[scene];
     t->history_head=(t->history_head+1)%TW_HISTORY;
     if(t->history_count<TW_HISTORY)t->history_count++;
@@ -60,7 +67,7 @@ static int remember(twain_t *t,int scene,int clip,int kind) {
 }
 static int remember_settings(twain_t *t,int scene,int clip) {
     int grouped=t->gesture_scene==scene && t->gesture_clip==clip;
-    if(grouped && t->gesture_saved)return 1;
+    if(grouped && t->gesture_saved) { t->io.revision++;return 1; }
     if(!remember(t,scene,clip,0))return 0;
     if(grouped)t->gesture_saved=1;
     return 1;
@@ -76,11 +83,13 @@ static void undo_edit(twain_t *t) {
         if(!mark_clip_restore(t->scene[edit->scene],edit->clip,&edit->saved,edit->kind==1))return;
         if(edit->kind==1)t->armed[edit->scene][edit->clip]=0;
     }
+    t->io.revision++;
     t->history_head=index; t->history_count--;
     t->gesture_scene=t->gesture_clip=-1; t->gesture_saved=0;
     t->master_editing=t->master_saved=0;
 }
 static void launch_armed(twain_t *t, int scene_start) {
+    if(atomic_load(&t->io.state))return;
     int scene = t->active;
     char quantize[8];
     mark_get_param(t->scene[scene], "quantize", quantize, sizeof quantize);
@@ -108,6 +117,7 @@ static void launch_armed(twain_t *t, int scene_start) {
 static void cycle(twain_t *t) {
     mark_scene_cycle(t->scene[t->active]);
     if (t->pending >= 0) {
+        t->io.revision++;
         t->active = t->pending;
         t->pending = -1;
         mark_scene_cycle(t->scene[t->active]);
@@ -119,6 +129,7 @@ static void cycle(twain_t *t) {
     launch_armed(t, 1);
 }
 void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
+    tw_io_poll(t);
     if (n <= 0) return;
     if (n > 128) n = 128;
     if (t->transport_stopped) { memset(out, 0, (size_t)n * 2 * sizeof(*out)); return; }
@@ -155,6 +166,9 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
     }
 }
 void twain_set_param(twain_t *t, const char *key, const char *val) {
+    tw_io_poll(t);
+    if(tw_io_param(t,key,val))return;
+    if(atomic_load(&t->io.state))return;
     if(!strcmp(key,"master_level") || !strcmp(key,"master_mute")) {
         int mute=!strcmp(key,"master_mute"),max=mute?1:200;
         char *end;long value=strtol(val,&end,10);if(!*val || *end)return;
@@ -166,6 +180,7 @@ void twain_set_param(twain_t *t, const char *key, const char *val) {
                 remember(t,t->active,0,mute?4:3);
                 if(!mute && t->master_editing)t->master_saved=1;
             }
+            t->io.revision++;
             *current=(int)value;
         }
         return;
@@ -266,6 +281,8 @@ void twain_set_param(twain_t *t, const char *key, const char *val) {
     mark_set_param(t->scene[scene], key, val);
 }
 int twain_get_param(twain_t *t, const char *key, char *buf, int n) {
+    tw_io_poll(t);
+    int project=tw_io_get(t,key,buf,n);if(project>=0)return project;
     if (!strcmp(key, "twain_status")) {
         char state[TW_SCENES][192]; int custom[TW_SCENES]={0},muted[TW_SCENES]={0};
         for(int scene=0;scene<TW_SCENES;scene++) {
@@ -309,6 +326,7 @@ int twain_get_param(twain_t *t, const char *key, char *buf, int n) {
     return mark_get_param(t->scene[scene], key, buf, n);
 }
 void twain_on_midi(twain_t *t, const uint8_t *msg, int n, int source) {
+    tw_io_poll(t);
     if (n > 0) {
         if (msg[0] == 0xfa || msg[0] == 0xfb) {
             t->clock_running = 1;
@@ -329,6 +347,9 @@ void twain_on_midi(twain_t *t, const uint8_t *msg, int n, int source) {
         }
     }
     /* Clock is shared, performance CCs address only the active scene. */
+    if(atomic_load(&t->io.state) && (n<=0 || msg[0]<0xf8))return;
     for(int i=0;i<TW_SCENES;i++)
         if(i==t->active || (n>0 && msg[0]>=0xf8))mark_on_midi(t->scene[i],msg,n,source);
 }
+
+#include "twain_project_io.inc"

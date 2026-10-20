@@ -1,4 +1,4 @@
-# Twain 0.4.0 prototype
+# Twain 0.5.0 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -91,27 +91,64 @@ one step too. Playback/scene requests do not fill history. There is no redo.
 Undo restores audio and control values, not FX tail memory. Five preallocated
 60-second spare buffers swap ownership instead of copying audio on render.
 
-## Saving investigation and limits
+## Move projects: automatic load, manual Save
 
-**Twain does not yet save or restore with Move projects. Restart loses its
-recordings, scene lengths, FX, volumes and mutes.** Undo is also RAM-only.
-No separate global workspace or manual project/slot workflow was substituted.
+Twain now selects a save by Move's persistent project UUID, using the installed
+host's live model generation before and after the `active_set` query. It does
+not use pad position, project-name guesses or active_set.txt as a save target.
+A missing, pending, unaligned or stale identity blocks edits and loads instead
+of associating recordings with the wrong set. This live API integration still
+requires an on-Move pass; the read-only hardware tests confirmed disk IDs for
+Set 23, a new Set 24 and its copy, not the execution of the in-module gate.
 
-The installed Schwung source exposes project identity (`active_set` and model
-generations) and host-owned `set_state/<uuid>` handling. Its slot autosave and
-shutdown/set-change saves do not include this overtake module's audio.
-Twain's inherited Mark session endpoints are not an integrated Twain save
-format. A reliable implementation would need worker-side audio snapshots,
-atomic whole-project commits/restores, and verified handling of changing,
-unsaved and duplicated Move projects. Those have not been established by this
-investigation, so automatic project saving is not claimed or enabled. Schwung
-has not been patched. The abandoned shortcut-patch preparation script was removed.
+- On opening a known project, its Twain save loads automatically.
+- On a project with no Twain save, turn the main jog knob to choose **Start
+  empty** or a saved Twain project as the source. Press it to select. Copying
+  requires a second confirmation and creates an independent workspace for
+  the current Move project. No name-based source is silently guessed.
+- **Press the main jog knob to Save.** An ASCII star `*` at the top right
+  indicates unsaved changes. A completed save clears it; failed saves keep
+  the workspace dirty. Newly started empty projects and copied projects also
+  need their first save. Turning/clicking the jog chooses dialog options.
+- A native project switch with unsaved Twain edits offers **Save then switch**,
+  **Discard and switch**, or **Cancel**. Cancel keeps the old Twain workspace;
+  it cannot undo the native Move switch. Reopen that Move project or click
+  the jog again to revisit switching. A choice from an obsolete project's
+  dialog is not applied to a newly opened project.
+- All four scenes, 16 clips' raw stereo audio, seven FX amounts, delay rates,
+  clip volume/mute, scene lengths, selected scene and master volume/mute save
+  together. Playback reloads stopped at bar 1; FX tails and undo history are
+  not saved. Press native Play and launch clips to continue.
+- Save waits for completed recordings: if a take is still armed/recording,
+  the screen asks to finish it first and offers Retry save. During file work,
+  editing is locked while playback can continue. Save failure and load failure
+  do not clear clips. A load whose target ID/generation changed is discarded.
+- An untouched new Move project has no persistent ID. Make/save a native
+  sketch first (as in the Set 24 test); Twain will wait rather than guess.
 
-All audio, FX and undo storage reserves about 326 MiB (341,741,280 bytes in
-the measured native build), excluding host/runtime overhead. Allocation fails
-rather than shortening the 60-second capacity. Four native generators remain
-available. Only four Twain clips render at once; inactive scenes retain audio.
-Render performs no allocation or file I/O. No time stretch or scene crossfade.
+Files are separate from exported `.ablbundle` files, at
+`/data/UserData/schwung/twain-projects/<UUID>.twp`. Deleting a native project
+leaves its Twain save recoverable as a copy source. Nothing auto-deletes saves.
+The source list shows up to 64 saved workspaces. An exported/imported Move
+bundle does NOT currently carry Twain audio; keep these files when backing up.
+No Schwung files or shortcuts are modified.
+
+The worker writes a versioned, capacity/range-checked, little-endian format
+with CRC32 over metadata and PCM, then fsyncs the temporary file and atomically
+renames it before syncing the directory. The previous file remains in place
+until rename; a directory-sync error is reported even if rename succeeded.
+Loading allocates and verifies all four private engines before exchanging
+scene pointers at a render boundary. Old engines are released on the worker.
+Dirty work remains intact on any parse/CRC/allocation/read failure. Generation
+checks reject a changed target before publishing the staged project.
+
+No file I/O, buffer copying or allocation occurs on render. A persistent worker
+is created with Twain. Saves borrow stable audio buffers while mutation is
+locked; loads temporarily need roughly another 273 MiB for private engines
+on top of the approximately 326 MiB normal audio/FX/undo budget. Allocation
+fails safely rather than reducing 60-second capacity. Four native generators
+remain available. Sound, CPU/disk timing and real power-cycle recovery still
+need hardware verification. No time stretch or scene crossfade.
 
 ## Build and install
 
@@ -123,5 +160,7 @@ Render performs no allocation or file I/O. No time stretch or scene crossfade.
 Pushes to `twain-prototype` run **Twain test package** on GitHub. Download
 **Twain-Move-test-package**, unzip it and keep `twain-module.tar.gz` intact.
 In Schwung Manager at http://move.local:7700 choose **Install Custom Module**
-and upload that tar.gz. Restart when requested; this discards unsaved audio.
+and upload that tar.gz. Save Twain before a later restart; only completed Twain saves survive.
+When first upgrading from 0.4, existing RAM-only recordings cannot be migrated
+by this package and will be lost on restart.
 Launch through the existing Tools/overtake menu. Builds never deploy to Move.
