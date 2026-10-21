@@ -281,3 +281,21 @@ The startup generation fix is a **separate proposed Schwung host patch** under
 installed on hardware. Twain retains its identity gate and displays **Reopen
 Move project** for the observed boot generation-zero mismatch. Until the host
 patch is integrated/tested, switch to another Move project and back to refresh.
+
+## Laptop export prototype and 0.9.1
+
+The separate **Twain Export** laptop page packages the last saved Move bundle,
+rendered scene-length Twain clips, separate 20-second FX tails, the original
+Twain save, and optional dry original PCM in one ZIP. It reuses Twain 0.9.0's FX
+code without changing its sound or processing audio on Move. This is a separate
+local helper, not an addition to Ableton's own Move Manager or a generated Live
+Set. See `tools/twain-export/README.md` for connection, formats and limits.
+
+Twain 0.9.1 corrects the recording meter to follow digital input gain cuts.
+The clipping warning still detects clipping at the source or after gain.
+Monitoring level changes playback volume, not this recording meter.
+
+Shift+jog now opens project tools without an early “Before copying” warning.
+Unsaved-work protection appears only after selecting another source or Start
+empty. Browsing tools, cleanup previews and cancelling the menu do not discard
+edits. A normal jog press still saves Twain. FX algorithms remain unchanged.

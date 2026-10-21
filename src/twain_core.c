@@ -162,11 +162,12 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
     if(atomic_load_explicit(&t->io.state,memory_order_acquire)==5) {
         memset(out,0,(size_t)n*MARK_CH*sizeof(int16_t));return;
     }
-    int16_t warm[256];float peak=0;
+    int16_t warm[256];float peak=0,source_peak=0;
     for(int i=0;i<n;i++)for(int c=0;c<2;c++) {
         float raw=in?in[i*2+c]/32768.0f:0;
         float boosted=raw*(t->input_level/100.0f);
-        peak=fmaxf(peak,fmaxf(fabsf(raw),fabsf(boosted)));
+        source_peak=fmaxf(source_peak,fabsf(raw));
+        peak=fmaxf(peak,fabsf(boosted));
         raw=fmaxf(-1,fminf(1,boosted));
         // Fixed preamp rounding and gentle top-end softening, once per input.
         float rounded=raw-0.025f*raw*raw*raw;
@@ -174,7 +175,7 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
         warm[i*2+c]=(int16_t)(t->warm_z[c]*32767.0f);
     }
     t->input_peak=fmaxf(fminf(peak,1),t->input_peak*0.94f);
-    if(peak>=0.997f)t->input_clip=MARK_SR;
+    if(peak>=0.997f || source_peak>=0.997f)t->input_clip=MARK_SR;
     else t->input_clip=t->input_clip>n?t->input_clip-n:0;
     if(t->io.identity_enabled && (!t->io.live[0] || strcmp(t->io.live,t->io.loaded))) {
         memset(out,0,(size_t)n*2*sizeof(*out));return;

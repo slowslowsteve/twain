@@ -37,8 +37,9 @@ assert.equal(status.id,A);ctl.click();assert.equal(ctl.view().mode,'unsaved');
 // Save first targets the bound old project, then attempts the current project.
 ctl.click();assert.equal(pending.key,'project_save');complete();assert.equal(pending.key,'project_load');assert.equal(pending.value,B);
 complete(1);assert.equal(pending.key,'project_new');complete();assert(ctl.guard());
-ctl.click(true);assert.equal(ctl.view().mode,'unsavedCopy');ctl.move(1);ctl.click();assert.equal(pending.key,'project_catalog');complete();assert.equal(ctl.view().mode,'source');
-ctl.move(1);assert.equal(ctl.view().choice,'Set A');ctl.click();assert.equal(ctl.view().mode,'copy');
+ctl.click(true);assert.equal(pending.key,'project_catalog');complete();assert.equal(ctl.view().mode,'source');
+ctl.move(1);assert.equal(ctl.view().choice,'Set A');ctl.click();assert.equal(ctl.view().mode,'unsavedCopy');
+ctl.move(1);ctl.click();assert.equal(ctl.view().mode,'copy');
 assert.equal(ctl.view().detail,'Set A');ctl.click();assert.equal(pending.value,A);assert.equal(pending.target,B);complete();
 assert(ctl.guard());assert(ctl.dirty);assert.equal(status.id,B);ctl.click();complete();assert(!ctl.dirty);
 // Unknown/pending IDs block edits and invalidate the native target.
@@ -119,3 +120,21 @@ console.log('Twain project UI: dropped identity retry, stale-result isolation, s
  assert.equal(c.view().detail,'Move link busy'); // incomplete names cannot authorize deletion
 }
 console.log('Twain cleanup UI: names and size preview, explicit default-to-keep confirmation and rescan recovery passed');
+
+// Opening/cancelling tools preserves dirty work; only choosing a replacement
+// asks to save/discard. Saving before Start empty continues that chosen action.
+{
+ const s={id:A,dirty:1,busy:0,result:0,serial:0};let job='';const sent=[];
+ const c=createProjectController({probe:()=>({ready:true,id:A,name:'Sketch',generation:1}),
+ get:k=>k==='project_status'?JSON.stringify(s):k==='project_catalog_count'?'0':'Sketch',
+ set:(k,v)=>{sent.push([k,v]);if(k==='project_live')return true;job=k;s.serial++;s.busy=1;return true;}});
+ const finish=()=>{s.busy=0;c.tick(true);};
+ c.tick(true);c.click(true);assert.equal(job,'project_catalog');finish();
+ assert.equal(c.view().mode,'source');assert.equal(c.view().choice,'Start empty');
+ c.move(1);c.move(1);assert.equal(c.view().choice,'Cancel');c.click();
+ assert(c.guard()&&c.dirty);assert(!sent.some(([k])=>k==='project_save'||k==='project_new'));
+ c.click(true);finish();c.click();assert.equal(c.view().mode,'unsavedCopy');
+ assert.equal(c.view().detail,'Before starting empty');assert.equal(c.view().choice,'Save then clear');
+ c.click();assert.equal(job,'project_save');s.dirty=0;finish();assert.equal(job,'project_new');
+}
+console.log('Twain tools: browsing/cancelling preserves edits; replacement confirmation follows the chosen operation');

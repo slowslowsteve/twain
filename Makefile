@@ -67,3 +67,11 @@ build/twain_projects_sim: src/mark_core.c src/mark_core.h src/twain_core.c src/t
 build/schwung_startup_generation: test/schwung_startup_generation.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) test/schwung_startup_generation.c -o $@
+
+.PHONY: test-export
+build/twain-export-laptop/twain-render: tools/twain-export/render.c src/twain_fx.h
+	@mkdir -p build/twain-export-laptop
+	$(CC) $(CFLAGS) tools/twain-export/render.c -o $@ -lm
+
+test-export: build/twain-export-laptop/twain-render
+	python3 -B test/twain_export.py

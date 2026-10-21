@@ -466,10 +466,20 @@ static void test_input_monitor(void) {
     twain_set_param(t,"monitor_safe","0");twain_process(t,in,out,128);
     for(int i=0;i<256;i++)assert(out[i]==0);
     twain_get_param(t,"twain_status",status,sizeof status);assert(strstr(status,"\"monitor_blocked\":1"));
+    // Recording meter follows gain cuts; monitor volume does not alter it.
+    twain_set_param(t,"input_level","25");
+    for(int j=0;j<100;j++)twain_process(t,in,out,128);
+    twain_get_param(t,"twain_status",status,sizeof status);assert(strstr(status,"\"input\":0.0916"));
+    twain_set_param(t,"monitor_level","0");twain_process(t,in,out,128);
+    twain_get_param(t,"twain_status",status,sizeof status);assert(strstr(status,"\"input\":0.0916"));
+    twain_set_param(t,"input_level","0");
+    for(int j=0;j<200;j++)twain_process(t,in,out,128);
+    twain_get_param(t,"twain_status",status,sizeof status);assert(strstr(status,"\"input\":0.000"));
+    // Source clipping still warns, even when digital trim is down.
     twain_set_param(t,"input_monitor","0");for(int i=0;i<256;i++)in[i]=32767;
     twain_process(t,in,out,128);twain_get_param(t,"twain_status",status,sizeof status);
     assert(strstr(status,"\"clip\":1"));for(int i=0;i<256;i++)assert(out[i]==0);
-    twain_destroy(t);puts("Twain: stopped-transport monitoring, feedback gate, subtle warmth and raw input meter passed");
+    twain_destroy(t);puts("Twain: stopped-transport monitoring, feedback gate, subtle warmth and post-trim input meter passed");
 }
 int main(void) {
     test_ranges_and_input();

@@ -79,7 +79,7 @@ export function createProjectController({get,set,probe=probeProjectIdentity,noti
         if(done.kind==='catalog') { chooseSource();return; }
         if(done.kind==='save' || done.kind==='saveSwitch' || done.kind==='saveCopy') {
             notice(status.dirty?'Changed during save':'Twain saved');
-            if(done.kind==='saveCopy' && !status.dirty) { request('project_catalog','1','catalog');return; }
+            if(done.kind==='saveCopy' && !status.dirty) { chooseCopy();return; }
             if(done.kind==='saveSwitch' && live && !status.dirty) { replace=live.id;load();return; }
         }
         mode='performance';replace='';evaluate();
@@ -109,19 +109,22 @@ export function createProjectController({get,set,probe=probeProjectIdentity,noti
         }
         if(live)targetId=live.id;
     }
+    function chooseCopy() {
+        if(copy.id===null)request('project_new','1','new');
+        else {mode='copy';selection=0;}
+    }
     let targetId='';
     function click(copyMenu=false) {
         const previousTarget=targetId;
         tick(true);if(!status || !live || status.busy || (previousTarget && previousTarget!==targetId))return;
         if(mode==='performance') {
             if(copyMenu) {
-                if(status.dirty) { mode='unsavedCopy';selection=0; }
-                else request('project_catalog','1','catalog');
+                request('project_catalog','1','catalog');
             } else if(status.dirty)request('project_save','1','save');else notice('Twain saved');
         } else if(mode==='unsavedCopy') {
             if(selection===0)request('project_save','1','saveCopy');
-            else if(selection===1)request('project_catalog','1','catalog');
-            else mode='performance';
+            else if(selection===1)chooseCopy();
+            else {mode='source';selection=0;}
         } else if(mode==='unsaved') {
             if(selection===0)request('project_save','1','saveSwitch');
             else if(selection===1) { replace=live.id;load(); }
@@ -129,9 +132,9 @@ export function createProjectController({get,set,probe=probeProjectIdentity,noti
         } else if(mode==='source') {
             copy=choices[selection];
             if(copy.id==='cleanup')request('project_cleanup_preview','1','cleanupPreview');
-            else if(copy.id==='cancel')keep();
-            else if(copy.id===null)request('project_new','1','new');
-            else { mode='copy';selection=0; }
+            else if(copy.id==='cancel') {if(status.id===live.id)mode='performance';else keep();}
+            else if(status.dirty) {mode='unsavedCopy';selection=0;}
+            else chooseCopy();
         } else if(mode==='copy') {
             if(selection===0)request('project_load',copy.id,'copy');
             else { mode='source';selection=0; }
@@ -159,7 +162,7 @@ export function createProjectController({get,set,probe=probeProjectIdentity,noti
         const currentName=live?.name || get('project_name') || 'Twain';
         let title=currentName,detail='',choice='';
         if(mode==='unsaved') { title='Unsaved Twain';detail=get('project_name') || 'Previous project';choice=['Save then switch','Discard and switch','Cancel'][selection]; }
-        else if(mode==='unsavedCopy') { title='Unsaved Twain';detail='Before copying';choice=['Save then copy','Discard then copy','Cancel'][selection]; }
+        else if(mode==='unsavedCopy') { title='Unsaved Twain';detail=copy?.id===null?'Before starting empty':'Before copying';choice=(copy?.id===null?['Save then clear','Discard then clear','Cancel']:['Save then copy','Discard then copy','Cancel'])[selection]; }
         else if(mode==='source') { detail='Twain projects:';choice=choices[selection]?.name || ''; }
         else if(mode==='copy') { title='Copy Twain from';detail=copy.name;choice=['Copy into this set','Cancel'][selection]; }
         else if(mode==='cleanupList') {

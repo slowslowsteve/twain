@@ -12,6 +12,8 @@ on:
       - 'test/*'
       - 'modules/overtake/twain/**'
       - 'scripts/build-twain.sh'
+      - 'scripts/build-twain-export.sh'
+      - 'tools/twain-export/**'
       - 'Makefile'
       - '.github/workflows/twain-build.yml'
   workflow_dispatch:
@@ -40,6 +42,8 @@ jobs:
           # complete engine bank (the previous loader) exceeds this limit.
           ulimit -v 819200
           ./build/twain_projects_sim
+      - name: Test laptop audio and Wi-Fi export prototype
+        run: make test-export
       - name: Check Twain with sanitizers
         run: make twain-sanitize
         env:
