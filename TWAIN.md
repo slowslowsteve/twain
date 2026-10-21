@@ -1,4 +1,4 @@
-# Twain 0.10.0 prototype
+# Twain 0.10.1 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -83,8 +83,9 @@ unless a stopped-playback cursor start was prepared.
 
 The header always names the playing scene and the selected editing clip,
 for example PLAY A / EDIT B3. The main readout gives the current bar and scene
-end in large digits. Selecting an empty B clip while A plays changes the edit
-target without launching B. Holding Loop shows the editing scene's range.
+end in medium-sized digits, with space before a separate Beat 2 / 4 row. Selecting an empty B clip while A plays changes the edit
+target without launching B. Holding Loop shows the editing scene's range: its first step is white,
+all remaining selected steps (including the last) are blue; outside steps stay dim.
 FX touches/turns temporarily show a large value; record count-in shows its
 remaining beats. The dirty star remains at the top right.
 Twain master volume/mute and monitor status stay above a bottom progress strip.

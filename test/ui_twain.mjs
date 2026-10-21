@@ -41,7 +41,7 @@ assert.equal(buttons.get(58),16);
 down(92);assert.deepEqual(writes.at(-1),['monitor_safe','0']);up(92);assert.deepEqual(writes.at(-1),['a_t1_clip','1']);
 cc(86);down(85);up(85);cc(86,0);assert.deepEqual(writes.at(-1),['b_t2_record','1']);
 cc(119);down(76);up(76);cc(119,0);assert.deepEqual(writes.at(-1),['a_t3_clear','1']);
-cc(58);assert.equal(buttons.get(58),124);down(19);up(19);assert.deepEqual(writes.at(-1),['a_scene_range','1,4']);
+cc(58);assert.equal(buttons.get(58),124);down(19);up(19);assert.deepEqual(writes.at(-1),['a_scene_range','1,4']);assert.equal(leds.get(16),120);assert.equal(leds.get(19),16);
 cc(63);down(31);up(31);assert.deepEqual(writes.at(-1),['b_scene_range','1,16']);
 cc(58,0);assert.equal(buttons.get(58),16);assert(text.includes('PLAY A'));
 const before=writes.length;cc(71,5);assert(writes.some(([k,v])=>k==='a_t3_hp'&&v==='5')); // selected clip remains editable
@@ -205,7 +205,7 @@ assert.equal(params.get('b_t1_lp'),'0');
 state.advance=0;params.set('b_t1_hp_res','30');cc(49);cc(71,5);assert.equal(params.get('b_t1_hp_res'),'35');
 now+=1000;context.onMidiMessageInternal([0x90,0,1]);context.onMidiMessageInternal([0x80,0,0]);now+=60;
 context.onMidiMessageInternal([0x90,0,1]);context.onMidiMessageInternal([0x80,0,0]);assert.equal(params.get('b_t1_hp_res'),'0');cc(49,0);
-cc(58);down(18);down(20);up(18);up(20);cc(58,0);assert.equal(params.get('b_scene_range'),'3,5');
+cc(58);down(18);down(20);up(18);up(20);assert.equal(leds.get(18),120);assert.equal(leds.get(19),16);assert.equal(leds.get(20),16);cc(58,0);assert.equal(params.get('b_scene_range'),'3,5');
 params.set('input_level','100');params.set('monitor_level','100');const priorMon=params.get('input_monitor');
 cc(86);cc(79,5);cc(86,0);assert.equal(params.get('input_level'),'105');assert.equal(claims.at(-1),0);
 cc(49);cc(86);cc(79,125);cc(86,0);cc(49,0);assert.equal(params.get('monitor_level'),'97');

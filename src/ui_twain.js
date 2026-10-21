@@ -53,11 +53,11 @@ function deliverStart() {
     }
 }
 const DIGITS={'0':['111','101','101','101','111'],'1':['010','110','010','010','111'],'2':['111','001','111','100','111'],'3':['111','001','111','001','111'],'4':['101','101','111','001','001'],'5':['111','100','111','001','111'],'6':['111','100','111','101','111'],'7':['111','001','010','010','010'],'8':['111','101','111','101','111'],'9':['111','101','111','001','111'],'/':['001','001','010','100','100'],' ':['000','000','000','000','000']};
-function bigBars(value,x=3,y=19) {
+function bigBars(value,x=3,y=19,scale=3) {
     for(const char of String(value)) {
         const glyph=DIGITS[char];
-        if(glyph)for(let row=0;row<5;row++)for(let col=0;col<3;col++)if(glyph[row][col]==='1')fill_rect(x+col*3,y+row*3,3,3,1);
-        x+=12;
+        if(glyph)for(let row=0;row<5;row++)for(let col=0;col<3;col++)if(glyph[row][col]==='1')fill_rect(x+col*scale,y+row*scale,scale,scale,1);
+        x+=4*scale;
     }
 }
 function volumeClaim() { claimVolume(shift || rec || monitorChord || pressed.size>0); }
@@ -128,7 +128,7 @@ function paint() {
         print(2,18,parameterReadout.name,1);
         bigBars(parameterReadout.number,2,28);print(81,28,parameterReadout.unit,1);
     } else {
-        bigBars(loop?`${start+1}/${bars}`:`${bar}/${snapshot.bars[snapshot.scene]}`);
+        bigBars(loop?`${start+1}/${bars}`:`${bar}/${snapshot.bars[snapshot.scene]}`,3,18,2);
         const clipState=Number(snapshot['abcd'[target.scene]].split('|')[0].split(',')[target.track]) || 0;
         const clipMuted=snapshot.muted && (snapshot.muted[target.scene] & (1<<target.track));
         const selectedState=snapshot.armed[target.scene][target.track]?'QUEUE':clipMuted?'MUTE':['EMPTY','REC','PLAY','PLAY','STOP'][clipState];
@@ -144,7 +144,7 @@ function paint() {
         const states=snapshot['abcd'[snapshot.scene]].split('|')[0].split(',').map(Number);
         const recording=states.map((v,i)=>v===1?`${label(snapshot.scene)}${i+1}`:'').filter(Boolean);
         const armed=snapshot.armed[snapshot.scene].map((v,i)=>v===4?`${label(snapshot.scene)}${i+1}`:'').filter(Boolean);
-        print(2,34,loop?'Scene range':recording.length?`REC ${recording.join(' ')}`.slice(0,21):armed.length?`REC next ${armed.join(' ')}`.slice(0,21):snapshot.stopped?'Stopped':`Beat ${Math.floor((phase%1)*4)+1}   ${bank?'5-8':'1-4'}`,1);
+        print(2,34,loop?'Scene range':recording.length?`REC ${recording.join(' ')}`.slice(0,21):armed.length?`REC next ${armed.join(' ')}`.slice(0,21):snapshot.stopped?'Stopped':`Beat ${Math.floor((phase%1)*4)+1} / 4   ${bank?'5-8':'1-4'}`,1);
     }
     print(2,44,snapshot.master_mute?'MUTED':`T${snapshot.master===undefined?100:snapshot.master}%`,1);
     const monitoring=!!snapshot.monitor && !snapshot.monitor_blocked;
@@ -167,7 +167,7 @@ function paint() {
     }
     for(let i=0;i<16;i++) {
         const current=snapshot.stopped?(validCursor?cursor:timelineStart):snapshot.bars[snapshot.scene]===1?Math.floor((phase%1)*16):bar-1;
-        const color=loop?((i===start || i===bars-1)?White:i>=start && i<bars?16:LightGrey)
+        const color=loop?(i===start?White:i>=start && i<bars?16:LightGrey)
             :i===current?White:i>=timelineStart && i<timelineEnd?33:Black;
         setLED(16+i,color,force);
     }
