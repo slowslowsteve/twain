@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 let now=0,reads=0,failed=false;
-const claims=[],rects=[];
+const claims=[],rects=[],frame=[];
 const writes=[],leds=new Map(),buttons=new Map(),text=[],announcements=[];
 const params=new Map(),critical=[];let failCritical=false;
 const state={scene:0,pending:-1,bars:[1,4,2,8],phase:0,stopped:0,custom:[0,0,0,0],muted:[0,0,0,0],starts:[0,0,0,0],master:100,master_mute:0,undo:0,
@@ -22,7 +22,7 @@ const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_maste
   if(k.endsWith('scene_range')){const [a,b]=v.split(',').map(Number),i='abcd'.indexOf(k[0]);state.starts[i]=a-1;state.bars[i]=b;}return true;
  },
  host_module_get_param(k){reads++; if(failed)return null;return k==='twain_status'?JSON.stringify(state):params.get(k)??'0';},
- fill_rect(...v){rects.push(v);},clear_screen(){},print(x,y,s){text.push(s);}
+ fill_rect(...v){rects.push(v);frame.push(['rect',...v]);},clear_screen(){frame.length=0;},print(x,y,s){text.push(s);frame.push(['text',x,y,s]);}
 });
 const module=new vm.SourceTextModule(fs.readFileSync('src/ui_twain.js','utf8'),{context});
 await module.link(async spec=>{
@@ -140,10 +140,10 @@ console.log('Twain UI: four-scene chords, independent edits, master volume, mute
 
 // Screen timeline fills within the bar and remains inside the 128x64 display.
 state.scene=0;state.bars[0]=4;state.phase=2.5;rects.length=0;context.onResume();
-assert(rects.some(([x,y,w,h])=>x===65&&y===57&&w===14&&h===4));
+assert(rects.some(([x,y,w,h])=>x===64&&y===61&&w===15&&h===1));
 assert(rects.every(([x,y,w,h])=>x>=0&&y>=0&&w>=0&&h>=0&&x+w<=128&&y+h<=64));
 state.bars[0]=1;state.phase=0.5;rects.length=0;context.onResume();
-assert(rects.some(([x,y,w,h])=>x===3&&y===57&&w===61&&h===4));
+assert(rects.some(([x,y,w,h])=>x===2&&y===61&&w===62&&h===1));
 assert(!text.some(s=>s.includes('Tap clip:')||s.includes('Hold Loop:')||s.includes('Vol / FX')));
 
 // Twain master level updates only its persistent row, with no transient duplicate.
@@ -225,12 +225,12 @@ assert(announcements.some(s=>s.includes('1200 ms')),JSON.stringify(text));
 state.monitor=0;state.monitor_blocked=0;state.input=1;state.clip=1;state.count_in=0;state.advance=0;
 rects.length=0;text.length=0;context.onResume();
 assert(text.includes('MON OFF'));assert(!text.includes('!'));
-assert(!rects.some(([x,y])=>x>=93&&y>=45&&y<51));
+assert(!rects.some(([x,y])=>x>=39&&x<75&&y===54));
 state.monitor=1;rects.length=0;text.length=0;context.onResume();
 assert(text.includes('MON ON'));assert(text.includes('!'));
-assert(rects.some(([x,y,w])=>x===94&&y===46&&w===23));
+assert(rects.some(([x,y,w])=>x===71&&y===54&&w===2));
 state.monitor_blocked=1;rects.length=0;text.length=0;context.onResume();
-assert(text.includes('MON X'));assert(!rects.some(([x,y])=>x>=93&&y>=45&&y<51));
+assert(text.includes('MON X'));assert(!rects.some(([x,y])=>x>=39&&x<75&&y===54));
 
 // Playing and editing can name different scenes; Loop follows the edited clip.
 state.scene=0;state.stopped=0;state.bars=[8,8,8,8];state.starts=[0,0,0,0];
@@ -277,3 +277,48 @@ state.stopped=0;state.start_ready=0;context.tick();context.tick();
 state.stopped=1;context.onResume();context.move_midi_inject_to_move=undefined;
 cc(85);cc(85,0);assert.equal(state.start_ready,0);assert.equal(params.get('cancel_start'),'1');
 console.log('Twain UI: native release retry and unavailable transport recovery passed');
+
+// Pocket instrument keeps timing above the replaceable center during every gesture.
+state.stopped=0;state.scene=0;state.starts=[0,0,0,0];state.bars=[8,8,8,8];state.phase=2.3;
+state.count_in=state.advance=0;state.pending=-1;context.onResume();cc(49);down(93);up(93);cc(49,0);
+function fixedTiming(){
+ assert(frame.some(c=>c[0]==='text'&&c[1]===2&&c[2]===15&&c[3]==='BAR 3/8'));
+ assert(frame.some(c=>c[0]==='text'&&c[1]===79&&c[2]===15&&c[3]==='BEAT 2/4'));
+ assert(frame.some(c=>c[0]==='text'&&c[3]==='EDIT B1'));
+ assert(frame.filter(c=>c[0]==='rect').every(([,x,y,w,h])=>x>=0&&y>=0&&x+w<=128&&y+h<=64));
+}
+const readoutCases=[
+ [71,'hp',100,false,'high pass','FREQ'],[72,'lp',1,false,'low pass','FREQ'],
+ [71,'hp',0,false,'high pass','FREQ'],[73,'comp_release',100,true,'compressor','RELEASE'],
+ [75,'chorus_rate',100,true,'chorus','RATE'],[76,'reverb_decay',100,true,'reverb','DECAY'],
+ [77,'delay_feedback',100,true,'delay','FEEDBACK'],[78,'delay_rate',8,false,'delay','TIME'],
+ [78,'delay_wow',100,true,'delay','WOW/FLUTTER']
+];
+for(const [knob,param,value,secondary,effect,parameter] of readoutCases){
+ params.set(`b_t1_${param}`,String(value));now+=1000;if(secondary)cc(49);
+ context.onMidiMessageInternal([0x90,knob-71,1]);context.onMidiMessageInternal([0x80,knob-71,0]);
+ fixedTiming();assert(frame.some(c=>c[0]==='text'&&c[2]===28&&c[3]===effect));
+ assert(frame.some(c=>c[0]==='text'&&c[2]===42&&c[3]===parameter));
+ const valuePixels=frame.filter(c=>c[0]==='rect'&&c[2]>=36&&c[2]<50);
+ assert(valuePixels.length>0);assert(valuePixels.every(c=>c[3]===2&&c[4]===2));
+ // Full-size units never collide with the parameter label or timing row.
+ assert(Math.min(...valuePixels.map(c=>c[1]))>=2+parameter.length*6+2);
+ assert(!frame.some(c=>c[0]==='rect'&&c[2]>12&&c[2]<25&&(c[1]<56||c[1]>=75)));
+ if(secondary)cc(49,0);
+}
+// Selection clears the old clip's readout instead of attributing it to a new clip.
+cc(49);down(94);up(94);cc(49,0);
+assert(!frame.some(c=>c[0]==='text'&&c[3]==='WOW/FLUTTER'));
+assert(frame.some(c=>c[0]==='text'&&c[3]==='clip C1'));
+cc(49);down(93);up(93);cc(49,0);cc(88);down(93);up(93);cc(88,0);fixedTiming();
+cc(58);fixedTiming();cc(58,0);
+// Monitoring announces its state without painting a duplicate center message.
+state.monitor=0;state.monitor_blocked=0;params.set('input_monitor','0');
+cc(49);cc(86);cc(86,0);cc(49,0);
+assert(!frame.some(c=>c[0]==='text'&&c[3]==='Monitor off'));fixedTiming();
+console.log('Pocket instrument: timing survives FX and shortcuts; all units share value size; extreme values fit; selection clears stale readouts');
+
+// Two-digit bar positions still leave a gap before the beat markers.
+state.bars[0]=16;state.phase=15.3;context.onResume();
+assert(frame.some(c=>c[0]==='text'&&c[3]==='BAR 16/16'));
+assert(frame.filter(c=>c[0]==='rect'&&c[2]>12&&c[2]<25).every(c=>c[1]>=56&&c[1]+c[3]<=74));

@@ -1,4 +1,4 @@
-# Twain 0.10.1 prototype
+# Twain 0.11.0 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -81,17 +81,26 @@ unless a stopped-playback cursor start was prepared.
 
 ## Screen and pads
 
-The header always names the playing scene and the selected editing clip,
-for example PLAY A / EDIT B3. The main readout gives the current bar and scene
-end in medium-sized digits, with space before a separate Beat 2 / 4 row. Selecting an empty B clip while A plays changes the edit
-target without launching B. Holding Loop shows the editing scene's range: its first step is white,
-all remaining selected steps (including the last) are blue; outside steps stay dim.
-FX touches/turns temporarily show a large value; record count-in shows its
-remaining beats. The dirty star remains at the top right.
-Twain master volume/mute and monitor status stay above a bottom progress strip.
-Each outlined segment is one bar, filling through its beats. When stopped,
-the selected scene's temporary start cursor highlights its hardware step and
-progress segment. There are no permanent instruction rows.
+The Pocket instrument screen keeps PLAY A, the selected clip badge (EDIT B3),
+BAR 3/8 and BEAT 2/4 in fixed positions throughout performance and editing.
+Four small beat markers step alongside the timing. The dirty star stays at
+the top right. Selecting an empty B clip while A plays changes the edit target
+without launching B.
+
+The center shows a lowercase effect name above its uppercase parameter,
+for example compressor / RELEASE, with the complete value (250 ms) in a
+matching-size bitmap font on the right. Decimal values, triplets and units
+stay together; higher filter frequencies use kHz to fit. Switching clips
+hides any previous clip's parameter readout. Count-in, range editing and
+shortcut messages use only this center area. Monitor on/off confirmations
+appear through the persistent monitor status rather than a duplicate message.
+
+The footer retains Twain volume/mute, MON ON/OFF/X and a post-input-gain meter
+that is visible only when monitoring is actually enabled. A thin segmented
+bar-progress strip follows underneath. Holding Loop shows the editing scene's
+range: its first hardware step is white and every remaining selected step,
+including the last, is blue; outside steps stay dim. When stopped, the selected
+scene's temporary start cursor highlights its step and progress segment.
 
 Empty pads are dim neutral; empty clips with retained settings have a subtle
 scene tint. Recording is red, playing green, stopped amber, and muted clips

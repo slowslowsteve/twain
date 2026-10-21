@@ -52,13 +52,89 @@ function deliverStart() {
         cancelStart();notice('Check MIDI Clock Out');
     }
 }
-const DIGITS={'0':['111','101','101','101','111'],'1':['010','110','010','010','111'],'2':['111','001','111','100','111'],'3':['111','001','111','001','111'],'4':['101','101','111','001','001'],'5':['111','100','111','001','111'],'6':['111','100','111','101','111'],'7':['111','001','010','010','010'],'8':['111','101','111','101','111'],'9':['111','101','111','001','111'],'/':['001','001','010','100','100'],' ':['000','000','000','000','000']};
-function bigBars(value,x=3,y=19,scale=3) {
+const POCKET_FONT={
+' ':['00000','00000','00000','00000','00000','00000','00000'],
+'A':['01110','10001','10001','11111','10001','10001','10001'],
+'B':['11110','10001','10001','11110','10001','10001','11110'],
+'C':['01111','10000','10000','10000','10000','10000','01111'],
+'D':['11110','10001','10001','10001','10001','10001','11110'],
+'E':['11111','10000','10000','11110','10000','10000','11111'],
+'F':['11111','10000','10000','11110','10000','10000','10000'],
+'G':['01111','10000','10000','10111','10001','10001','01111'],
+'H':['10001','10001','10001','11111','10001','10001','10001'],
+'I':['11111','00100','00100','00100','00100','00100','11111'],
+'J':['00111','00010','00010','00010','10010','10010','01100'],
+'K':['10001','10010','10100','11000','10100','10010','10001'],
+'L':['10000','10000','10000','10000','10000','10000','11111'],
+'M':['10001','11011','10101','10101','10001','10001','10001'],
+'N':['10001','11001','10101','10011','10001','10001','10001'],
+'O':['01110','10001','10001','10001','10001','10001','01110'],
+'P':['11110','10001','10001','11110','10000','10000','10000'],
+'Q':['01110','10001','10001','10001','10101','10010','01101'],
+'R':['11110','10001','10001','11110','10100','10010','10001'],
+'S':['01111','10000','10000','01110','00001','00001','11110'],
+'T':['11111','00100','00100','00100','00100','00100','00100'],
+'U':['10001','10001','10001','10001','10001','10001','01110'],
+'V':['10001','10001','10001','10001','10001','01010','00100'],
+'W':['10001','10001','10001','10101','10101','10101','01010'],
+'X':['10001','10001','01010','00100','01010','10001','10001'],
+'Y':['10001','10001','01010','00100','00100','00100','00100'],
+'Z':['11111','00001','00010','00100','01000','10000','11111'],
+'0':['01110','10001','10011','10101','11001','10001','01110'],
+'1':['00100','01100','00100','00100','00100','00100','01110'],
+'2':['01110','10001','00001','00010','00100','01000','11111'],
+'3':['11110','00001','00001','01110','00001','00001','11110'],
+'4':['00010','00110','01010','10010','11111','00010','00010'],
+'5':['11111','10000','10000','11110','00001','00001','11110'],
+'6':['01110','10000','10000','11110','10001','10001','01110'],
+'7':['11111','00001','00010','00100','01000','01000','01000'],
+'8':['01110','10001','10001','01110','10001','10001','01110'],
+'9':['01110','10001','10001','01111','00001','00001','01110'],
+'/':['00001','00001','00010','00100','01000','10000','10000'],
+'%':['11001','11010','00010','00100','01000','01011','10011'],
+'*':['00000','10101','01110','11111','01110','10101','00000'],
+'-':['00000','00000','00000','11111','00000','00000','00000'],
+'h':['10000','10000','10110','11001','10001','10001','10001'],
+'z':['00000','00000','11111','00010','00100','01000','11111'],
+'m':['00000','00000','11010','10101','10101','10101','10101'],
+'s':['00000','00000','01111','10000','01110','00001','11110']};
+Object.assign(POCKET_FONT,{
+'.':['00000','00000','00000','00000','00000','00110','00110'],
+'k':['10000','10000','10010','10100','11000','10100','10010'],
+'a':['00000','00000','01110','00001','01111','10001','01111'],
+'b':['10000','10000','10110','11001','10001','10001','11110'],
+'c':['00000','00000','01111','10000','10000','10000','01111'],
+'d':['00001','00001','01101','10011','10001','10001','01111'],
+'e':['00000','00000','01110','10001','11111','10000','01110'],
+'f':['00110','01001','01000','11100','01000','01000','01000'],
+'g':['00000','01111','10001','10001','01111','00001','01110'],
+'i':['00100','00000','01100','00100','00100','00100','01110'],
+'l':['01100','00100','00100','00100','00100','00100','01110'],
+'n':['00000','00000','11110','10001','10001','10001','10001'],
+'o':['00000','00000','01110','10001','10001','10001','01110'],
+'p':['00000','00000','11110','10001','11110','10000','10000'],
+'r':['00000','00000','10110','11001','10000','10000','10000'],
+'t':['01000','01000','11100','01000','01000','01001','00110'],
+'u':['00000','00000','10001','10001','10001','10011','01101'],
+'v':['00000','00000','10001','10001','10001','01010','00100'],
+'y':['00000','00000','10001','10001','01111','00001','01110']});
+// Fixed bitmap glyphs keep the complete value and unit at the same size.
+function valueWidth(value,scale=2) {
+    let width=0;
+    for(const char of value)width+=(char===' '?3:6)*scale;
+    return Math.max(0,width-scale);
+}
+function pocketText(value,x,y,scale=2,color=1) {
     for(const char of String(value)) {
-        const glyph=DIGITS[char];
-        if(glyph)for(let row=0;row<5;row++)for(let col=0;col<3;col++)if(glyph[row][col]==='1')fill_rect(x+col*scale,y+row*scale,scale,scale,1);
-        x+=4*scale;
+        const glyph=POCKET_FONT[char] || POCKET_FONT[char.toUpperCase()] || POCKET_FONT[' '];
+        for(let row=0;row<7;row++)for(let col=0;col<5;col++)if(glyph[row][col]==='1')fill_rect(x+col*scale,y+row*scale,scale,scale,color);
+        x+=(char===' '?3:6)*scale;
     }
+}
+function pocketValue(amount,y=36) { pocketText(amount,126-valueWidth(amount),y); }
+function centralMessage(message) {
+    print(2,29,message.slice(0,21),1);
+    if(message.length>21)print(2,42,message.slice(21,42),1);
 }
 function volumeClaim() { claimVolume(shift || rec || monitorChord || pressed.size>0); }
 function key(clip,name) { return `${prefix(clip.scene)}t${clip.track+1}_${name}`; }
@@ -84,7 +160,7 @@ function poll() {
         if(Array.isArray(next.bars) && typeof next.a==='string' && typeof next.b==='string' && typeof next.c==='string' && typeof next.d==='string') {
             snapshot=next;
             if(!selected || lastProject!==projects.id) {
-                endEdit();bank=0;selected=clipAt(92+next.scene);lastProject=projects.id;
+                endEdit();bank=0;selected=clipAt(92+next.scene);lastProject=projects.id;parameterReadout=null;overlayUntil=0;
             }
         }
     } catch (_) {}
@@ -118,52 +194,58 @@ function paint() {
     const phase=Math.max(activeStart,Math.min(snapshot.phase,snapshot.bars[snapshot.scene]-0.0001));
     const cursor=snapshot.cursors?.[target.scene];
     const validCursor=Number.isInteger(cursor) && cursor>=(snapshot.starts?.[target.scene] || 0) && cursor<snapshot.bars[target.scene];
-    const bar=Math.floor(phase)+1;
-    print(2,1,loop?`LOOP ${label(s)}`:`${snapshot.stopped?'STOP':'PLAY'} ${label(snapshot.scene)}`,1);
-    print(70,1,`EDIT ${label(target.scene)}${target.track+1}`,1);
-    fill_rect(2,12,124,1,1);
+    const bar=Math.floor(phase)+1,beat=snapshot.count_in?5-snapshot.count_in:Math.floor((phase%1)*4)+1;
+    print(2,1,`${snapshot.stopped?'STOP':'PLAY'} ${label(snapshot.scene)}`,1);
+    print(65,1,`EDIT ${label(target.scene)}${target.track+1}`,1);
+    fill_rect(92,0,18,9,1);pocketText(`${label(target.scene)}${target.track+1}`,95,1,1,0);
+    fill_rect(2,11,124,1,1);
+    // Timing has a permanent home, outside the replaceable editing area.
+    print(2,15,`BAR ${bar}/${snapshot.bars[snapshot.scene]}`,1);
+    print(79,15,`BEAT ${beat}/4`,1);
+    for(let i=0;i<4;i++)fill_rect(56+i*5,i+1===beat?16:18,3,i+1===beat?5:1,1);
+    fill_rect(2,25,124,1,1);
+    const readout=parameterReadout && parameterReadout.scene===target.scene && parameterReadout.track===target.track && now<overlayUntil;
+    const hasNotice=now<overlayUntil && !parameterReadout && !/^Monitor (on|off)$/.test(overlay);
     if(snapshot.count_in) {
-        print(2,18,'COUNT-IN',1);bigBars(snapshot.count_in,101,19);
-    } else if(parameterReadout && now<overlayUntil && !loop && !snapshot.advance) {
-        print(2,18,parameterReadout.name,1);
-        bigBars(parameterReadout.number,2,28);print(81,28,parameterReadout.unit,1);
-    } else {
-        bigBars(loop?`${start+1}/${bars}`:`${bar}/${snapshot.bars[snapshot.scene]}`,3,18,2);
-        const clipState=Number(snapshot['abcd'[target.scene]].split('|')[0].split(',')[target.track]) || 0;
-        const clipMuted=snapshot.muted && (snapshot.muted[target.scene] & (1<<target.track));
-        const selectedState=snapshot.armed[target.scene][target.track]?'QUEUE':clipMuted?'MUTE':['EMPTY','REC','PLAY','PLAY','STOP'][clipState];
-        // The editing target stays explicit, including on another playing scene.
-        print(93,19,selectedState,1);
-    }
-    if(snapshot.advance)print(2,34,'Last bar next',1);
-    else if(now<overlayUntil && !parameterReadout)print(2,34,overlay.slice(0,21),1);
-    else if(parameterReadout && now<overlayUntil){}
-    else if(snapshot.stopped && validCursor)print(2,34,`Start ${label(target.scene)} bar ${cursor+1}`,1);
-    else if(snapshot.pending>=0)print(2,34,`Next ${label(snapshot.pending)} at end`,1);
+        print(2,29,'COUNT-IN',1);pocketValue(String(snapshot.count_in));
+    } else if(loop) {
+        print(2,28,`scene ${label(s)}`,1);print(2,42,'RANGE',1);pocketValue(`${start+1}-${bars}`);
+    } else if(readout) {
+        print(2,28,parameterReadout.effect,1);print(2,42,parameterReadout.parameter,1);
+        pocketValue(parameterReadout.amount);
+    } else if(snapshot.advance)centralMessage('Last bar next');
+    else if(hasNotice)centralMessage(overlay);
+    else if(snapshot.stopped && validCursor)centralMessage(`Start ${label(target.scene)} bar ${cursor+1}`);
+    else if(snapshot.pending>=0)centralMessage(`Next ${label(snapshot.pending)} at end`);
     else {
         const states=snapshot['abcd'[snapshot.scene]].split('|')[0].split(',').map(Number);
         const recording=states.map((v,i)=>v===1?`${label(snapshot.scene)}${i+1}`:'').filter(Boolean);
         const armed=snapshot.armed[snapshot.scene].map((v,i)=>v===4?`${label(snapshot.scene)}${i+1}`:'').filter(Boolean);
-        print(2,34,loop?'Scene range':recording.length?`REC ${recording.join(' ')}`.slice(0,21):armed.length?`REC next ${armed.join(' ')}`.slice(0,21):snapshot.stopped?'Stopped':`Beat ${Math.floor((phase%1)*4)+1} / 4   ${bank?'5-8':'1-4'}`,1);
+        const clipState=Number(snapshot['abcd'[target.scene]].split('|')[0].split(',')[target.track]) || 0;
+        const clipMuted=snapshot.muted && (snapshot.muted[target.scene] & (1<<target.track));
+        const selectedState=snapshot.armed[target.scene][target.track]?'QUEUE':clipMuted?'MUTE':['EMPTY','REC','PLAY','PLAY','STOP'][clipState];
+        print(2,28,`clip ${label(target.scene)}${target.track+1}`,1);print(2,42,selectedState,1);
+        if(recording.length)print(44,28,`REC ${recording.join(' ')}`.slice(0,13),1);
+        else if(armed.length)print(44,28,`ARM ${armed.join(' ')}`.slice(0,13),1);
     }
-    print(2,44,snapshot.master_mute?'MUTED':`T${snapshot.master===undefined?100:snapshot.master}%`,1);
+    print(2,53,snapshot.master_mute?'MUTED':`T${snapshot.master===undefined?100:snapshot.master}%`,1);
     const monitoring=!!snapshot.monitor && !snapshot.monitor_blocked;
-    print(46,44,snapshot.monitor_blocked?'MON X':monitoring?'MON ON':'MON OFF',1);
+    const monitorLabel=snapshot.monitor_blocked?'MON X':monitoring?'MON ON':'MON OFF';
+    print(126-(monitorLabel.length*6-1),53,monitorLabel,1);
     if(monitoring) {
-        fill_rect(93,45,25,6,1);fill_rect(94,46,23,4,0);
-        const meter=Math.max(0,Math.min(23,Math.round(23*Math.sqrt(snapshot.input || 0))));
-        if(meter)fill_rect(94,46,meter,4,1);
-        if(snapshot.clip)print(121,44,'!',1);
+        fill_rect(39,58,34,1,1);
+        const meter=Math.max(0,Math.min(9,Math.round(9*Math.sqrt(snapshot.input || 0))));
+        for(let i=0;i<meter;i++)fill_rect(39+i*4,54,2,4,1);
+        if(snapshot.clip)print(77,53,'!',1);
     }
     const timelineScene=loop?s:snapshot.stopped?target.scene:snapshot.scene;
     const timelineStart=snapshot.starts?.[timelineScene] || 0;
     const timelineEnd=snapshot.bars[timelineScene],total=timelineEnd-timelineStart,width=124/total;
     for(let i=0;i<total;i++) {
         const x=2+Math.floor(i*width),w=Math.max(2,Math.floor((i+1)*width)-Math.floor(i*width)-1);
-        fill_rect(x,55,w,1,1);fill_rect(x,62,w,1,1);
-        fill_rect(x,55,1,8,1);fill_rect(x+w-1,55,1,8,1);
+        fill_rect(x,62,w,1,1);
         const progress=loop?0:snapshot.stopped?(validCursor && cursor===timelineStart+i?1:0):Math.max(0,Math.min(1,phase-timelineStart-i));
-        if(progress>0)fill_rect(x+1,57,Math.round((w-2)*progress),4,1);
+        if(progress>0)fill_rect(x,61,Math.round(w*progress),1,1);
     }
     for(let i=0;i<16;i++) {
         const current=snapshot.stopped?(validCursor?cursor:timelineStart):snapshot.bars[snapshot.scene]===1?Math.floor((phase%1)*16):bar-1;
@@ -213,8 +295,15 @@ function showValue(controller,param,value) {
     if(param==='reverb_decay')amount=`${(0.2*Math.pow(100,value/100)).toFixed(1)} s`;
     if(param==='delay_feedback')amount=`${(value*0.995).toFixed(1)}%`;
     notice(`${label(target.scene)}${target.track+1} ${name}: ${amount}`);
-    const parts=amount.match(/^([0-9]+)(.*)$/);
-    if(parts)parameterReadout={name,number:parts[1],unit:parts[2]};
+    const index=controller-MoveKnob1;
+    const effect=param==='level'?'clip':['high pass','low pass','compressor','drive','chorus','reverb','delay','delay'][index];
+    const parameter=param==='level'?'LEVEL':ALT.includes(param)?['RESONANCE','RESONANCE','RELEASE','DIRT','RATE','DECAY','FEEDBACK','WOW/FLUTTER'][index]:['FREQ','FREQ','AMOUNT','SEND','SEND','SEND','SEND','TIME'][index];
+    // Compact frequency units allow full-size units even at the filters' maxima.
+    if((param==='hp' || param==='lp') && value!==0) {
+        const hz=Number(amount.split(' ')[0]);
+        if(hz>=1000)amount=`${Number((hz/1000).toFixed(1))}kHz`;
+    }
+    parameterReadout={effect,parameter,amount,scene:target.scene,track:target.track};
 }
 function beginEdit() {
     const target=editTarget();
@@ -363,7 +452,7 @@ globalThis.onMidiMessageInternal=function(data) {
             endEdit();for(const clip of pressed.values())clip.used=true;
             pressed.clear();held=null;bank=note===MoveDown?1:0;
             const row=selected?selected.track%4:0,scene=selected?selected.scene:(snapshot?snapshot.scene:0);
-            selected=clipAt(92-row*8+scene);volumeClaim();refresh();return;
+            selected=clipAt(92-row*8+scene);parameterReadout=null;overlayUntil=0;volumeClaim();refresh();return;
         }
         if(note===MoveRec) {
             if(value>0) { endMasterEdit();monitorChord=shift;monitorUsed=false;rec=!monitorChord; }
@@ -433,6 +522,7 @@ globalThis.onMidiMessageInternal=function(data) {
         if(pressed.has(note))return;
         if(loop) { editScene=clip.scene; paint(); return; }
         endEdit();
+        if(!selected || selected.scene!==clip.scene || selected.track!==clip.track){parameterReadout=null;overlayUntil=0;}
         held=clip;selected=clip;pressed.set(note,clip);volumeClaim();
         if(shift && !mute && !del && !rec)clip.used=true;
         if(mute)muteClip(clip);
