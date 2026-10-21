@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 let now=0,reads=0,failed=false;
 const claims=[],rects=[];
-const writes=[],leds=new Map(),buttons=new Map(),text=[];
+const writes=[],leds=new Map(),buttons=new Map(),text=[],announcements=[];
 const params=new Map(),critical=[];let failCritical=false;
 const state={scene:0,pending:-1,bars:[1,4,2,8],phase:0,stopped:0,custom:[0,0,0,0],muted:[0,0,0,0],starts:[0,0,0,0],master:100,master_mute:0,undo:0,
  a:'0,1,2,4|0,0,0,0|0,0,0,0|0|0',b:'4,0,2,0|0,0,0,0|0,0,0,0|0|0',c:'0,0,0,0|0,0,0,0',d:'0,0,0,0|0,0,0,0',armed:Array.from({length:4},()=>[0,0,0,0])};
@@ -15,7 +15,11 @@ const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_maste
  host_module_set_param_blocking(k,v,timeout){
   assert.equal(timeout,100);critical.push([k,v]);
   if(failCritical){failCritical=false;return false;}
-  writes.push([k,v]);params.set(k,v);if(k.endsWith('scene_range')){const [a,b]=v.split(',').map(Number),i='abcd'.indexOf(k[0]);state.starts[i]=a-1;state.bars[i]=b;}return true;
+  writes.push([k,v]);params.set(k,v);
+  if(k==='prepare_start'){state.start_serial=(state.start_serial||0)+1;state.count_in=params.get('test_prepare_count')==='1'?4:0;state.start_ready=state.count_in?0:1;}
+  if(k==='cancel_start'){state.count_in=state.start_ready=0;}
+  if(k.endsWith('start_bar'))state.cursors['abcd'.indexOf(k[0])]=Number(v)-1;
+  if(k.endsWith('scene_range')){const [a,b]=v.split(',').map(Number),i='abcd'.indexOf(k[0]);state.starts[i]=a-1;state.bars[i]=b;}return true;
  },
  host_module_get_param(k){reads++; if(failed)return null;return k==='twain_status'?JSON.stringify(state):params.get(k)??'0';},
  fill_rect(...v){rects.push(v);},clear_screen(){},print(x,y,s){text.push(s);}
@@ -23,7 +27,7 @@ const context=vm.createContext({Date:FakeDate,shadow_set_overtake_suppress_maste
 const module=new vm.SourceTextModule(fs.readFileSync('src/ui_twain.js','utf8'),{context});
 await module.link(async spec=>{
  const vals=spec.includes('twain_projects')?{createProjectController:()=>({tick(){},click(){},move(){},guard:()=>true,modal:false,dirty:false,name:'Test project'})}:spec.includes('constants')?constants:spec.includes('input_filter')?
- {setLED:(n,c)=>leds.set(n,c),setButtonLED:(n,c)=>buttons.set(n,c),decodeDelta:v=>v<64?v:v-128}:{announce(){}};
+ {setLED:(n,c)=>leds.set(n,c),setButtonLED:(n,c)=>buttons.set(n,c),decodeDelta:v=>v<64?v:v-128}:{announce(s){announcements.push(s);}};
  return new vm.SyntheticModule(Object.keys(vals),function(){for(const[k,v]of Object.entries(vals))this.setExport(k,v);},{context});
 });
 await module.evaluate();
@@ -39,7 +43,7 @@ cc(86);down(85);up(85);cc(86,0);assert.deepEqual(writes.at(-1),['b_t2_record','1
 cc(119);down(76);up(76);cc(119,0);assert.deepEqual(writes.at(-1),['a_t3_clear','1']);
 cc(58);assert.equal(buttons.get(58),124);down(19);up(19);assert.deepEqual(writes.at(-1),['a_scene_range','1,4']);
 cc(63);down(31);up(31);assert.deepEqual(writes.at(-1),['b_scene_range','1,16']);
-cc(58,0);assert.equal(buttons.get(58),16);assert(text.includes('A Bar 1/4'));
+cc(58,0);assert.equal(buttons.get(58),16);assert(text.includes('PLAY A'));
 const before=writes.length;cc(71,5);assert(writes.some(([k,v])=>k==='a_t3_hp'&&v==='5')); // selected clip remains editable
 params.set('a_t1_level','100');down(92);cc(79,5);up(92);assert(writes.some(([k,v])=>k==='a_t1_level'&&v==='105'));assert.deepEqual(writes.at(-1),['edit_end','1']);
 assert(!writes.slice(before).some(([k])=>k==='scene'||k.endsWith('_clip')));
@@ -49,9 +53,9 @@ const beforeMaster=writes.length;cc(79,2);assert.equal(writes.length,beforeMaste
 assert(claims.includes(1));assert.equal(claims.at(-1),0);
 cc(63);assert.equal(state.pending,1);cc(63);assert.equal(state.pending,2);cc(63);assert.equal(state.pending,3);cc(62);assert.equal(state.pending,2);cc(62);cc(62);assert.equal(state.pending,-1);
 state.armed[0][0]=4;context.onResume();assert.equal(leds.get(92),1);now=250;context.tick();assert.equal(leds.get(92),0);
-state.phase=2.2;context.onResume();assert(text.includes('A Bar 3/4'));assert.equal(leds.get(18),120);
+state.phase=2.2;context.onResume();assert(text.includes('PLAY A'));assert.equal(leds.get(18),120);
 const r=reads;for(let i=0;i<12;i++)context.tick();assert.equal(reads-r,6);
-failed=true;context.onResume();assert(text.includes('A Bar 3/4'));failed=false;
+failed=true;context.onResume();assert(text.includes('PLAY A'));failed=false;
 // The host may replace these globals with the track editor's bridge during callbacks.
 context.host_module_get_param=()=>null;context.host_module_set_param=()=>{throw Error('wrong DSP');};
 down(84);up(84);assert.deepEqual(writes.at(-1),['a_t2_clip','1']);
@@ -68,7 +72,7 @@ cc(56);assert.deepEqual(writes.at(-1),['undo','1']);
 params.set('a_t1_lp','73');down(92);
 const changes=writes.length;
 context.onMidiMessageInternal([0x90,1,127]);context.onMidiMessageInternal([0x80,1,0]);
-assert.equal(writes.length,changes);assert(text.includes('A1 LP freq: 345 Hz'));
+assert.equal(writes.length,changes);assert(announcements.includes('A1 LP freq: 345 Hz'));
 now+=100;context.onMidiMessageInternal([0x90,1,127]);context.onMidiMessageInternal([0x80,1,0]);
 assert.deepEqual(writes.at(-1),['a_t1_lp','0']);up(92);
 assert.deepEqual(writes.at(-1),['edit_end','1']);
@@ -80,7 +84,7 @@ context.onMidiMessageInternal([0x90,0,127]);context.onMidiMessageInternal([0x80,
 context.onMidiMessageInternal([0x90,0,127]);up(92);
 assert.equal(params.get('a_t1_hp'),'41');
 params.set('b_t1_delay_rate','5');down(93);cc(78,1);up(93);
-assert.equal(params.get('b_t1_delay_rate'),'6');assert(text.includes('B1 Delay time: 1/8T'));
+assert.equal(params.get('b_t1_delay_rate'),'6');assert(announcements.includes('B1 Delay time: 1/8T'));
 // Double touch knob 8 returns to the default eighth note, not rate index zero.
 down(93);for(let i=0;i<2;i++){now+=100;context.onMidiMessageInternal([0x90,7,127]);context.onMidiMessageInternal([0x80,7,0]);}up(93);
 assert.equal(params.get('b_t1_delay_rate'),'5');
@@ -125,7 +129,7 @@ assert.equal(params.get('d_t1_mute'),'1');assert(!writes.slice(start).some(([k])
 start=writes.length;cc(88);cc(88);assert.equal(writes.length,start);cc(88,0);
 assert.equal(params.get('master_mute'),'1');cc(88);cc(88,0);assert.equal(params.get('master_mute'),'0');
 state.master_mute=1;state.muted[2]=1;context.onResume();assert.equal(buttons.get(88),124);assert.equal(leds.get(94),Math.sin(now*2*Math.PI/3000)>-0.2?107:108);
-assert(text.includes('TWN MUTED'));
+assert(text.includes('MUTED'));
 // C and D keep independent lengths through the Loop gesture.
 cc(58);down(94);down(20);up(20);down(95);down(30);up(30);cc(58,0);
 assert.equal(params.get('c_scene_range'),'1,5');assert.equal(params.get('d_scene_range'),'1,15');
@@ -136,10 +140,10 @@ console.log('Twain UI: four-scene chords, independent edits, master volume, mute
 
 // Screen timeline fills within the bar and remains inside the 128x64 display.
 state.scene=0;state.bars[0]=4;state.phase=2.5;rects.length=0;context.onResume();
-assert(rects.some(([x,y,w,h])=>x===65&&y===56&&w===14&&h===5));
+assert(rects.some(([x,y,w,h])=>x===65&&y===57&&w===14&&h===4));
 assert(rects.every(([x,y,w,h])=>x>=0&&y>=0&&w>=0&&h>=0&&x+w<=128&&y+h<=64));
 state.bars[0]=1;state.phase=0.5;rects.length=0;context.onResume();
-assert(rects.some(([x,y,w,h])=>x===3&&y===56&&w===61&&h===5));
+assert(rects.some(([x,y,w,h])=>x===3&&y===57&&w===61&&h===4));
 assert(!text.some(s=>s.includes('Tap clip:')||s.includes('Hold Loop:')||s.includes('Vol / FX')));
 
 // Twain master level updates only its persistent row, with no transient duplicate.
@@ -149,7 +153,7 @@ assert(!text.some(s=>s.startsWith('Twain volume:')));
 // Bank changes address layers 5-8; selection edits without holding or playback.
 for(const scene of 'abcd')state[scene]='0,0,0,0,0,0,0,0|0';
 state.armed=Array.from({length:4},()=>Array(8).fill(0));state.master_mute=0;
-cc(54);assert(text.includes('Test project 5-8'));
+cc(54);assert.equal(buttons.get(55),124);
 start=writes.length;cc(49);down(77);up(77);cc(49,0);
 assert(!writes.slice(start).some(([k])=>k.endsWith('_clip')));
 cc(71,9);assert.equal(params.get('b_t7_hp'),'9');
@@ -188,7 +192,7 @@ cc(85);cc(85);cc(85,0);assert.deepEqual(native,[[11,176,85,127],[11,176,85,0]]);
 let jumpStart=writes.length;cc(49);cc(85);cc(49,0);cc(85,0);
 assert(writes.slice(jumpStart).some(([k])=>k==='advance_last'));assert.equal(native.length,2);
 cc(85);cc(49);cc(85,0);cc(49,0);assert.equal(native.length,4); // modifier changes don't strand a held native button
-state.count_in=4;text.length=0;context.onResume();assert(text.includes('Count-in: 4'));
+state.count_in=4;text.length=0;context.onResume();assert(text.includes('COUNT-IN'));
 state.count_in=0;state.advance=1;text.length=0;context.onResume();assert(text.includes('Last bar next'));
 
 // Low-velocity touch packets and quick taps work on the selected clip without holding it.
@@ -201,18 +205,75 @@ assert.equal(params.get('b_t1_lp'),'0');
 state.advance=0;params.set('b_t1_hp_res','30');cc(49);cc(71,5);assert.equal(params.get('b_t1_hp_res'),'35');
 now+=1000;context.onMidiMessageInternal([0x90,0,1]);context.onMidiMessageInternal([0x80,0,0]);now+=60;
 context.onMidiMessageInternal([0x90,0,1]);context.onMidiMessageInternal([0x80,0,0]);assert.equal(params.get('b_t1_hp_res'),'0');cc(49,0);
-cc(58);down(18);down(20);up(18);up(20);cc(58,0);assert.equal(params.get('a_scene_range'),'3,5');
+cc(58);down(18);down(20);up(18);up(20);cc(58,0);assert.equal(params.get('b_scene_range'),'3,5');
 params.set('input_level','100');params.set('monitor_level','100');const priorMon=params.get('input_monitor');
 cc(86);cc(79,5);cc(86,0);assert.equal(params.get('input_level'),'105');assert.equal(claims.at(-1),0);
 cc(49);cc(86);cc(79,125);cc(86,0);cc(49,0);assert.equal(params.get('monitor_level'),'97');
 assert.equal(params.get('input_monitor'),priorMon); // monitor adjustment doesn't toggle it
 console.log('Twain UI: quick selected taps, Shift FX, scene range chord and independent input/monitor levels passed');
 
-state.scene=0;state.starts[0]=2;state.bars[0]=5;state.phase=0.5;state.count_in=4;text.length=0;context.onResume();assert(text.includes('A Bar 3/5'));
+state.scene=0;state.starts[0]=2;state.bars[0]=5;state.phase=0.5;state.count_in=4;text.length=0;context.onResume();assert(text.includes('COUNT-IN'));
 
 // Compressor secondary displays the implemented release time, not old attack units.
 state.count_in=0;
 cc(49);down(93);up(93);cc(49,0);params.set('b_t1_comp_release','99');
 text.length=0;cc(49);cc(73,1);cc(49,0);
 assert.equal(params.get('b_t1_comp_release'),'100');
-assert(text.some(s=>s.includes('1200 ms')),JSON.stringify(text));
+assert(announcements.some(s=>s.includes('1200 ms')),JSON.stringify(text));
+
+// Monitor OFF remains visually dark even when the independent input detector peaks.
+state.monitor=0;state.monitor_blocked=0;state.input=1;state.clip=1;state.count_in=0;state.advance=0;
+rects.length=0;text.length=0;context.onResume();
+assert(text.includes('MON OFF'));assert(!text.includes('!'));
+assert(!rects.some(([x,y])=>x>=93&&y>=45&&y<51));
+state.monitor=1;rects.length=0;text.length=0;context.onResume();
+assert(text.includes('MON ON'));assert(text.includes('!'));
+assert(rects.some(([x,y,w])=>x===94&&y===46&&w===23));
+state.monitor_blocked=1;rects.length=0;text.length=0;context.onResume();
+assert(text.includes('MON X'));assert(!rects.some(([x,y])=>x>=93&&y>=45&&y<51));
+
+// Playing and editing can name different scenes; Loop follows the edited clip.
+state.scene=0;state.stopped=0;state.bars=[8,8,8,8];state.starts=[0,0,0,0];
+cc(49);down(93);up(93);cc(49,0);text.length=0;context.tick();
+assert(text.includes('PLAY A'));assert(text.includes('EDIT B1'));
+cc(58);down(19);up(19);cc(58,0);assert.equal(params.get('b_scene_range'),'1,4');
+
+// Simulate the DSP prepared-start handshake, including a local count-in.
+state.stopped=1;state.count_in=0;state.start_ready=0;state.start_serial=0;state.cursors=[-1,-1,-1,-1];
+// The fixture's original setter drives these response fields (configured below).
+params.set('test_prepare_count','1');context.onResume();
+const nativeBefore=native.length;
+down(18);up(18);assert.equal(params.get('b_start_bar'),'3');
+// Cursor writes must not change the chosen range.
+assert.equal(params.get('b_scene_range'),'1,4');
+cc(49);cc(85);cc(49,0);cc(85,0);
+assert.equal(params.get('prepare_start'),'1,3');assert.equal(native.length,nativeBefore);
+state.count_in=0;state.start_ready=1;
+context.tick();context.tick();
+assert.deepEqual(native.slice(nativeBefore),[[11,176,85,127],[11,176,85,0]]);
+for(let i=0;i<8;i++)context.tick();assert.equal(native.length,nativeBefore+2);
+state.stopped=0;state.start_ready=0;context.tick();context.tick();
+// Normal Play from stop starts the playing scene at its range beginning.
+state.stopped=1;params.set('test_prepare_count','0');context.onResume();cc(85);cc(85,0);
+assert.equal(params.get('prepare_start'),'0,0');assert.equal(native.length,nativeBefore+4);
+state.stopped=0;state.start_ready=0;context.tick();context.tick();
+// A second Play during count-in cancels it without touching native transport.
+state.stopped=1;params.set('test_prepare_count','1');context.onResume();cc(85);cc(85,0);
+const beforeCancel=native.length;cc(85);cc(85,0);
+assert.equal(params.get('cancel_start'),'1');assert.equal(native.length,beforeCancel);
+// Parking cancels a pending countdown; later polls must never start Move.
+cc(85);cc(85,0);context.overtakeParked=true;context.tick();
+assert.equal(state.count_in,0);assert.equal(native.length,beforeCancel);
+context.overtakeParked=false;context.onResume();
+console.log('Twain UI: monitoring visibility, explicit off-scene editing, temporary cursor, count-in handshake and cancellation passed');
+// A dropped native release retries only release, never the Play press.
+params.set('test_prepare_count','0');state.stopped=1;state.start_ready=0;context.onResume();
+let failRelease=true;
+context.move_midi_inject_to_move=packet=>{native.push(Array.from(packet));if(packet[3]===0&&failRelease){failRelease=false;return false;}return true;};
+let safetyStart=native.length;cc(85);cc(85,0);context.tick();
+assert.deepEqual(native.slice(safetyStart),[[11,176,85,127],[11,176,85,0],[11,176,85,0]]);
+state.stopped=0;state.start_ready=0;context.tick();context.tick();
+// Missing native transport support cancels the prepared engine rather than freezing it.
+state.stopped=1;context.onResume();context.move_midi_inject_to_move=undefined;
+cc(85);cc(85,0);assert.equal(state.start_ready,0);assert.equal(params.get('cancel_start'),'1');
+console.log('Twain UI: native release retry and unavailable transport recovery passed');

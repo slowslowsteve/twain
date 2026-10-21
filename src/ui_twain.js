@@ -18,8 +18,9 @@ let bank=0, selected=null, editingClip=null, lastEditAt=0, lastProject=null, las
 let snapshot=null, held=null, rec=false, del=false, loop=false, editScene=0;
 let pressed=new Map(), shift=false, mute=false, muteUsed=false;
 let masterEditing=false, playRoute=null, monitorChord=false, monitorUsed=false;
+let requestedStart=false, startProject=null, sentStart=-1, nativeRelease=false, startAt=0;
 let rangeSteps=new Set(),rangeAnchor=null,rangeSent=false,rangeScene=0;
-let ticks=0, lastForce=-10000, overlay='', overlayUntil=0;
+let ticks=0, lastForce=-10000, overlay='', overlayUntil=0, parameterReadout=null;
 function claimVolume(on) {
     if(typeof shadow_set_overtake_suppress_master_volume==='function')
         shadow_set_overtake_suppress_master_volume(on?1:0);
@@ -31,6 +32,34 @@ function nativePlay(value) {
     notice('Host: Play unavailable');return false;
 }
 function releasePlay() { if(playRoute==='native')nativePlay(0);playRoute=null; }
+function cancelStart() {
+    if(requestedStart)dspCritical('cancel_start','1',100);
+    requestedStart=false;
+}
+function deliverStart() {
+    if(nativeRelease && nativePlay(0)!==false)nativeRelease=false;
+    if(!requestedStart)return;
+    if(globalThis.overtakeParked || projects.modal || projects.id!==startProject) {cancelStart();return;}
+    if(snapshot && (!snapshot.stopped || (!snapshot.start_ready && !snapshot.count_in))) {requestedStart=false;return;}
+    if(snapshot && snapshot.start_ready && snapshot.start_serial!==sentStart) {
+        if(!projects.guard()) {cancelStart();return;}
+        sentStart=snapshot.start_serial;
+        if(nativePlay(127)===false) {cancelStart();return;}
+        nativeRelease=true;startAt=Date.now();
+        if(nativePlay(0)!==false)nativeRelease=false;
+    }
+    if(snapshot && snapshot.start_serial===sentStart && Date.now()-startAt>2500) {
+        cancelStart();notice('Check MIDI Clock Out');
+    }
+}
+const DIGITS={'0':['111','101','101','101','111'],'1':['010','110','010','010','111'],'2':['111','001','111','100','111'],'3':['111','001','111','001','111'],'4':['101','101','111','001','001'],'5':['111','100','111','001','111'],'6':['111','100','111','101','111'],'7':['111','001','010','010','010'],'8':['111','101','111','101','111'],'9':['111','101','111','001','111'],'/':['001','001','010','100','100'],' ':['000','000','000','000','000']};
+function bigBars(value,x=3,y=19) {
+    for(const char of String(value)) {
+        const glyph=DIGITS[char];
+        if(glyph)for(let row=0;row<5;row++)for(let col=0;col<3;col++)if(glyph[row][col]==='1')fill_rect(x+col*3,y+row*3,3,3,1);
+        x+=12;
+    }
+}
 function volumeClaim() { claimVolume(shift || rec || monitorChord || pressed.size>0); }
 function key(clip,name) { return `${prefix(clip.scene)}t${clip.track+1}_${name}`; }
 function clipAt(note) {
@@ -82,49 +111,64 @@ function paint() {
         if(v.choice) { print(2,37,`< ${v.choice.slice(0,17)} >`,1);print(2,54,'Press main knob',1); }
         return;
     }
-    if(projects.dirty)print(118,2,'*',1);
+    if(projects.dirty)print(120,1,'*',1);
+    const target=selected || {scene:snapshot.scene,track:0};
     const s=loop?editScene:snapshot.scene, bars=snapshot.bars[s],start=snapshot.starts?.[s] || 0;
     const activeStart=snapshot.starts?.[snapshot.scene] || 0;
-    const phase=Math.max(0,Math.min(snapshot.phase,snapshot.bars[snapshot.scene]-0.0001));
-    const timelinePhase=snapshot.count_in?activeStart+phase:phase;
-    const bar=Math.floor(timelinePhase)+1, beat=Math.floor((phase%1)*4)+1;
-    print(2,2,loop?`Set ${label(s)}: ${start+1}-${bars}`:`${label(snapshot.scene)} Bar ${bar}/${snapshot.bars[snapshot.scene]}`,1);
-    print(2,14,`${projects.name.slice(0,13)} ${bank?'5-8':'1-4'}`,1);
-    if(snapshot.count_in)print(2,28,`Count-in: ${snapshot.count_in}`,1);
-    else if(snapshot.advance)print(2,28,'Last bar next',1);
-    else if(now<overlayUntil) print(2,28,overlay.slice(0,21),1);
-    else if(snapshot.stopped) print(2,28,'Stopped',1);
-    else if(snapshot.pending>=0) print(2,28,`Next ${label(snapshot.pending)} at end`,1);
+    const phase=Math.max(activeStart,Math.min(snapshot.phase,snapshot.bars[snapshot.scene]-0.0001));
+    const cursor=snapshot.cursors?.[target.scene];
+    const validCursor=Number.isInteger(cursor) && cursor>=(snapshot.starts?.[target.scene] || 0) && cursor<snapshot.bars[target.scene];
+    const bar=Math.floor(phase)+1;
+    print(2,1,loop?`LOOP ${label(s)}`:`${snapshot.stopped?'STOP':'PLAY'} ${label(snapshot.scene)}`,1);
+    print(70,1,`EDIT ${label(target.scene)}${target.track+1}`,1);
+    fill_rect(2,12,124,1,1);
+    if(snapshot.count_in) {
+        print(2,18,'COUNT-IN',1);bigBars(snapshot.count_in,101,19);
+    } else if(parameterReadout && now<overlayUntil && !loop && !snapshot.advance) {
+        print(2,18,parameterReadout.name,1);
+        bigBars(parameterReadout.number,2,28);print(81,28,parameterReadout.unit,1);
+    } else {
+        bigBars(loop?`${start+1}/${bars}`:`${bar}/${snapshot.bars[snapshot.scene]}`);
+        const clipState=Number(snapshot['abcd'[target.scene]].split('|')[0].split(',')[target.track]) || 0;
+        const clipMuted=snapshot.muted && (snapshot.muted[target.scene] & (1<<target.track));
+        const selectedState=snapshot.armed[target.scene][target.track]?'QUEUE':clipMuted?'MUTE':['EMPTY','REC','PLAY','PLAY','STOP'][clipState];
+        // The editing target stays explicit, including on another playing scene.
+        print(93,19,selectedState,1);
+    }
+    if(snapshot.advance)print(2,34,'Last bar next',1);
+    else if(now<overlayUntil && !parameterReadout)print(2,34,overlay.slice(0,21),1);
+    else if(parameterReadout && now<overlayUntil){}
+    else if(snapshot.stopped && validCursor)print(2,34,`Start ${label(target.scene)} bar ${cursor+1}`,1);
+    else if(snapshot.pending>=0)print(2,34,`Next ${label(snapshot.pending)} at end`,1);
     else {
         const states=snapshot['abcd'[snapshot.scene]].split('|')[0].split(',').map(Number);
         const recording=states.map((v,i)=>v===1?`${label(snapshot.scene)}${i+1}`:'').filter(Boolean);
         const armed=snapshot.armed[snapshot.scene].map((v,i)=>v===4?`${label(snapshot.scene)}${i+1}`:'').filter(Boolean);
-        if(recording.length)print(2,28,`REC ${recording.join(' ')}`.slice(0,20),1);
-        else if(armed.length)print(2,28,`REC next: ${armed.join(' ')}`.slice(0,20),1);
-        else if(selected) {
-            const clipState=snapshot['abcd'[selected.scene]].split('|')[0].split(',').map(Number)[selected.track] || 0;
-            print(2,28,`${label(selected.scene)}${selected.track+1} ${snapshot.muted && (snapshot.muted[selected.scene] & (1<<selected.track))?'MUTE':['EMPTY','REC','PLAY','PLAY','STOP'][clipState]}  Beat ${beat}`,1);
-        }
+        print(2,34,loop?'Scene range':recording.length?`REC ${recording.join(' ')}`.slice(0,21):armed.length?`REC next ${armed.join(' ')}`.slice(0,21):snapshot.stopped?'Stopped':`Beat ${Math.floor((phase%1)*4)+1}   ${bank?'5-8':'1-4'}`,1);
     }
-    print(2,41,snapshot.master_mute?'TWN MUTED':`Twain ${snapshot.master===undefined?100:snapshot.master}%`,1);
-    print(64,41,snapshot.monitor_blocked?'X':snapshot.monitor?'MON':'IN',1);
-    fill_rect(86,43,32,6,1);fill_rect(87,44,30,4,0);
-    const meter=Math.max(0,Math.min(30,Math.round(30*Math.sqrt(snapshot.input || 0))));
-    if(meter)fill_rect(87,44,meter,4,1);
-    if(snapshot.clip)print(121,41,'!',1);
-    // Persistent segmented timeline: the current bar fills through its beats.
-    const total=snapshot.bars[snapshot.scene]-activeStart, width=124/total;
+    print(2,44,snapshot.master_mute?'MUTED':`T${snapshot.master===undefined?100:snapshot.master}%`,1);
+    const monitoring=!!snapshot.monitor && !snapshot.monitor_blocked;
+    print(46,44,snapshot.monitor_blocked?'MON X':monitoring?'MON ON':'MON OFF',1);
+    if(monitoring) {
+        fill_rect(93,45,25,6,1);fill_rect(94,46,23,4,0);
+        const meter=Math.max(0,Math.min(23,Math.round(23*Math.sqrt(snapshot.input || 0))));
+        if(meter)fill_rect(94,46,meter,4,1);
+        if(snapshot.clip)print(121,44,'!',1);
+    }
+    const timelineScene=loop?s:snapshot.stopped?target.scene:snapshot.scene;
+    const timelineStart=snapshot.starts?.[timelineScene] || 0;
+    const timelineEnd=snapshot.bars[timelineScene],total=timelineEnd-timelineStart,width=124/total;
     for(let i=0;i<total;i++) {
-        const x=2+Math.floor(i*width), w=Math.max(2,Math.floor((i+1)*width)-Math.floor(i*width)-1);
-        fill_rect(x,54,w,1,1);fill_rect(x,62,w,1,1);
-        fill_rect(x,54,1,9,1);fill_rect(x+w-1,54,1,9,1);
-        const progress=Math.max(0,Math.min(1,timelinePhase-activeStart-i));
-        if(progress>0)fill_rect(x+1,56,Math.round((w-2)*progress),5,1);
+        const x=2+Math.floor(i*width),w=Math.max(2,Math.floor((i+1)*width)-Math.floor(i*width)-1);
+        fill_rect(x,55,w,1,1);fill_rect(x,62,w,1,1);
+        fill_rect(x,55,1,8,1);fill_rect(x+w-1,55,1,8,1);
+        const progress=loop?0:snapshot.stopped?(validCursor && cursor===timelineStart+i?1:0):Math.max(0,Math.min(1,phase-timelineStart-i));
+        if(progress>0)fill_rect(x+1,57,Math.round((w-2)*progress),4,1);
     }
     for(let i=0;i<16;i++) {
-        const current=(snapshot.count_in || snapshot.bars[snapshot.scene]===1)?Math.floor((phase%1)*16):bar-1;
+        const current=snapshot.stopped?(validCursor?cursor:timelineStart):snapshot.bars[snapshot.scene]===1?Math.floor((phase%1)*16):bar-1;
         const color=loop?((i===start || i===bars-1)?White:i>=start && i<bars?16:LightGrey)
-            :i===current?White:(i>=activeStart && i<snapshot.bars[snapshot.scene]) || snapshot.count_in || snapshot.bars[snapshot.scene]===1?33:Black;
+            :i===current?White:i>=timelineStart && i<timelineEnd?33:Black;
         setLED(16+i,color,force);
     }
     const scenes=[snapshot.a,snapshot.b,snapshot.c,snapshot.d].map(v=>v.split('|').map(p=>p.split(',').map(Number)));
@@ -146,7 +190,7 @@ function paint() {
     }
 }
 function refresh() { poll(); paint(); }
-function notice(text) { overlay=text; overlayUntil=Date.now()+1800; announce(text); }
+function notice(text) { parameterReadout=null;overlay=text; overlayUntil=Date.now()+1800; announce(text); }
 function paramFor(controller) { return controller===MoveMaster?'level':(shift?ALT:FX)[controller-MoveKnob1]; }
 function readValue(param,fresh=false) {
     const target=editTarget();
@@ -169,6 +213,8 @@ function showValue(controller,param,value) {
     if(param==='reverb_decay')amount=`${(0.2*Math.pow(100,value/100)).toFixed(1)} s`;
     if(param==='delay_feedback')amount=`${(value*0.995).toFixed(1)}%`;
     notice(`${label(target.scene)}${target.track+1} ${name}: ${amount}`);
+    const parts=amount.match(/^([0-9]+)(.*)$/);
+    if(parts)parameterReadout={name,number:parts[1],unit:parts[2]};
 }
 function beginEdit() {
     const target=editTarget();
@@ -220,7 +266,7 @@ function muteClip(clip) {
     notice(`${label(clip.scene)}${clip.track+1} ${next==='1'?'muted':'unmuted'}`);
 }
 globalThis.init=function(){monitorSafety();projects.tick(true);refresh();};
-globalThis.onResume=function() { releasePlay(); monitorSafety(true);endEdit();endMasterEdit(); pressed.clear();held=null;shift=mute=muteUsed=false; claimVolume(false); rec=del=loop=monitorChord=monitorUsed=false;rangeSteps.clear();rangeAnchor=null; lastForce=-10000;projects.tick(true); refresh(); };
+globalThis.onResume=function() { cancelStart();releasePlay(); monitorSafety(true);endEdit();endMasterEdit(); pressed.clear();held=null;shift=mute=muteUsed=false; claimVolume(false); rec=del=loop=monitorChord=monitorUsed=false;rangeSteps.clear();rangeAnchor=null; lastForce=-10000;projects.tick(true); refresh(); };
 globalThis.tick=function() {
     monitorSafety();
     if(editingClip && !held && Date.now()-lastEditAt>600)endEdit();
@@ -229,15 +275,28 @@ globalThis.tick=function() {
     }
     projects.tick();
     if(projects.modal && (held || shift || rec || monitorChord)) { endEdit();endMasterEdit();pressed.clear();held=null;shift=false;claimVolume(false); }
-    if(++ticks%2===0)poll();paint();
+    if(++ticks%2===0)poll();deliverStart();paint();
 };
 globalThis.onMidiMessageInternal=function(data) {
     const type=data[0]&0xf0, note=data[1], value=data[2];
     if(type!==0x90 && type!==0x80 && type!==0xb0)return;
     if(type===0xb0 && note===MovePlay) {
         if(value>0 && playRoute===null) {
+            poll();if(snapshot && !snapshot.stopped)requestedStart=false;
             playRoute=shift?'advance':'native';
-            if(playRoute==='native')nativePlay(value);
+            if(requestedStart) {cancelStart();playRoute='cancel';notice('Start cancelled');}
+            else if(snapshot && snapshot.stopped) {
+                playRoute='prepared';
+                if(projects.guard()) {
+                    const scene=shift && selected?selected.scene:snapshot.scene;
+                    const cursor=snapshot.cursors?.[scene];
+                    const bar=shift && Number.isInteger(cursor) && cursor>=(snapshot.starts?.[scene] || 0) && cursor<snapshot.bars[scene]?cursor+1:0;
+                    if(dspCritical('prepare_start',`${scene},${bar}`,100)!==false) {
+                        requestedStart=true;startProject=projects.id;poll();deliverStart();
+                    }
+                }
+            }
+            else if(playRoute==='native')nativePlay(value);
             else if(projects.guard()) {
                 const wasQueued=snapshot && snapshot.advance;
                 dspCritical('advance_last','1',100);poll();
@@ -299,7 +358,7 @@ globalThis.onMidiMessageInternal=function(data) {
             const operation=shift?'redo':'undo',available=snapshot && snapshot[operation]>0;
             dspCritical(operation,'1',100);poll();notice(available?`${shift?'Redo':'Undo'}: ${snapshot[operation]} left`:`Nothing to ${operation}`);paint();return;
         }
-        if(note===MoveLoop) { for(const clip of pressed.values())clip.used=true;loop=value>0;if(!loop){if(rangeAnchor!==null && !rangeSent)dspCritical(prefix(rangeScene)+'scene_range',`1,${rangeAnchor-15}`,100);rangeSteps.clear();rangeAnchor=null;rangeSent=false;} if(loop)editScene=snapshot?snapshot.scene:0; paint(); return; }
+        if(note===MoveLoop) { for(const clip of pressed.values())clip.used=true;loop=value>0;if(!loop){if(rangeAnchor!==null && !rangeSent)dspCritical(prefix(rangeScene)+'scene_range',`1,${rangeAnchor-15}`,100);rangeSteps.clear();rangeAnchor=null;rangeSent=false;} if(loop)editScene=selected?selected.scene:snapshot?snapshot.scene:0; paint(); return; }
         if((note===MoveUp || note===MoveDown) && value>0) {
             endEdit();for(const clip of pressed.values())clip.used=true;
             pressed.clear();held=null;bank=note===MoveDown?1:0;
@@ -365,6 +424,10 @@ globalThis.onMidiMessageInternal=function(data) {
         }
         refresh();return;
     }
+    if(!loop && snapshot && snapshot.stopped && note>=16 && note<=31 && type===0x90 && value>0) {
+        const scene=selected?selected.scene:snapshot.scene;
+        dspCritical(prefix(scene)+'start_bar',String(note-15),100);refresh();return;
+    }
     if(type===0x90 && value>0) {
         const clip=clipAt(note); if(!clip)return;
         if(pressed.has(note))return;
@@ -397,4 +460,4 @@ globalThis.onMidiMessageInternal=function(data) {
         }
     }
 };
-globalThis.onUnload=function() { releasePlay(); endEdit();endMasterEdit();pressed.clear();held=null;shift=false;claimVolume(false); };
+globalThis.onUnload=function() { cancelStart();releasePlay();if(nativeRelease)nativePlay(0); endEdit();endMasterEdit();pressed.clear();held=null;shift=false;claimVolume(false); };

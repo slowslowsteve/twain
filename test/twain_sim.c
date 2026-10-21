@@ -148,13 +148,17 @@ static void test_clip_workflow(void) {
     t=twain_create(NULL,NULL); assert(t);
     twain_set_param(t,"a_t1_record","1");
     uint8_t start=0xfa,tick=0xf8;
-    twain_on_midi(t,&start,1,3);render(t,1);
-    expect(t,"tstates","0,0,0,0");
-    char countdown[2048];twain_get_param(t,"twain_status",countdown,sizeof countdown);assert(strstr(countdown,"\"count_in\":4"));
-    for(int i=0;i<95;i++){twain_on_midi(t,&tick,1,3);render(t,1);}
-    expect(t,"tstates","0,0,0,0");
+    uint8_t stop=0xfc;twain_on_midi(t,&stop,1,3);
+    twain_set_param(t,"prepare_start","0,0");
+    char countdown[2048];twain_get_param(t,"twain_status",countdown,sizeof countdown);
+    assert(strstr(countdown,"\"count_in\":4") && strstr(countdown,"\"stopped\":1"));
+    // Local audio samples count down with no native Start or MIDI clocks.
+    frames(t,66150);expect(t,"tstates","0,0,0,0");
     twain_get_param(t,"twain_status",countdown,sizeof countdown);assert(strstr(countdown,"\"count_in\":1"));
-    twain_on_midi(t,&tick,1,3);render(t,1);
+    frames(t,22050);twain_get_param(t,"twain_status",countdown,sizeof countdown);
+    assert(strstr(countdown,"\"start_ready\":1") && strstr(countdown,"\"stopped\":1"));
+    render(t,20);expect(t,"tstates","0,0,0,0"); // waits for actual native Start
+    twain_on_midi(t,&start,1,3);render(t,1);
     expect(t,"tstates","1,0,0,0");
     for(int i=0;i<95;i++){twain_on_midi(t,&tick,1,3);render(t,1);}
     expect(t,"tstates","1,0,0,0");
@@ -402,7 +406,7 @@ static void test_ranges_and_input(void) {
     twain_set_param(t,"undo","1");expect(t,"scene_start","1");expect(t,"scene_bars","1");
     twain_set_param(t,"redo","1");expect(t,"scene_start","3");expect(t,"scene_bars","5");
     uint8_t start=0xfa,tick=0xf8;twain_set_param(t,"a_t1_record","1");twain_on_midi(t,&start,1,3);render(t,1);
-    for(int i=0;i<96;i++){twain_on_midi(t,&tick,1,3);render(t,1);}expect(t,"scene_bar","3");expect(t,"tstates","1,0,0,0");
+    expect(t,"scene_bar","3");expect(t,"tstates","1,0,0,0");
     for(int i=0;i<288;i++){twain_on_midi(t,&tick,1,3);render(t,1);}expect(t,"scene_bar","3");expect(t,"tstates","2,0,0,0");
     twain_destroy(t);
     t=twain_create(NULL,NULL);assert(t);uint8_t stop=0xfc;twain_on_midi(t,&stop,1,3);
@@ -432,7 +436,7 @@ static void test_advance_last(void) {
     twain_set_param(t,"advance_last","1");twain_get_param(t,"twain_status",json,sizeof json);assert(strstr(json,"\"advance\":0"));
     for(int i=0;i<8*96-1;i++){twain_on_midi(t,&tick,1,3);render(t,1);}
     expect(t,"tstates","1,0,0,0");twain_on_midi(t,&tick,1,3);render(t,1);expect(t,"tstates","2,0,0,0");
-    twain_on_midi(t,&stop,1,3);twain_set_param(t,"a_t2_record","1");twain_on_midi(t,&start,1,3);render(t,1);
+    twain_on_midi(t,&stop,1,3);twain_set_param(t,"a_t2_record","1");twain_set_param(t,"prepare_start","0,0");render(t,1);
     twain_get_param(t,"twain_status",json,sizeof json);assert(strstr(json,"\"count_in\":4"));
     twain_on_midi(t,&stop,1,3);render(t,1);twain_get_param(t,"twain_status",json,sizeof json);assert(strstr(json,"\"count_in\":0"));
     twain_destroy(t);
@@ -481,6 +485,36 @@ static void test_input_monitor(void) {
     assert(strstr(status,"\"clip\":1"));for(int i=0;i<256;i++)assert(out[i]==0);
     twain_destroy(t);puts("Twain: stopped-transport monitoring, feedback gate, subtle warmth and post-trim input meter passed");
 }
+static void test_start_cursor(void) {
+    twain_t *t=twain_create(NULL,NULL);assert(t);char json[2048];
+    select_scene(t,1);twain_set_param(t,"b_scene_bars","8");
+    twain_set_param(t,"b_quantize","0");twain_set_param(t,"b_t1_btn","1");
+    frames(t,88200*8);twain_set_param(t,"b_t1_btn","1");
+    uint8_t start=0xfa,stop=0xfc,tick=0xf8;twain_on_midi(t,&stop,1,3);
+    twain_set_param(t,"b_start_bar","4");
+    twain_get_param(t,"twain_status",json,sizeof json);assert(strstr(json,"\"cursors\":[-1,3,-1,-1]"));
+    twain_set_param(t,"prepare_start","1,4");twain_on_midi(t,&start,1,3);render(t,1);
+    expect(t,"scene","1");expect(t,"scene_bar","4");expect(t,"tpos","48,0,0,0");
+    expect(t,"b_scene_start","1");expect(t,"b_scene_bars","8");
+    // Cursor is temporary: an ordinary start still uses the saved scene start.
+    twain_on_midi(t,&stop,1,3);twain_set_param(t,"prepare_start","1,0");
+    twain_on_midi(t,&start,1,3);render(t,1);expect(t,"scene_bar","1");expect(t,"tpos","0,0,0,0");
+    // Starting a take from a later bar records there, through the scene end.
+    twain_on_midi(t,&stop,1,3);twain_set_param(t,"b_t2_record","1");
+    twain_set_param(t,"prepare_start","1,6");frames(t,88200);
+    twain_get_param(t,"twain_status",json,sizeof json);assert(strstr(json,"\"start_ready\":1"));
+    twain_on_midi(t,&start,1,3);render(t,1);expect(t,"b_t2_origin","5");
+    expect(t,"tstates","2,1,0,0");
+    for(int i=0;i<3*96;i++){twain_on_midi(t,&tick,1,3);render(t,1);}
+    expect(t,"tstates","2,2,0,0");expect(t,"scene_bar","1");
+    twain_on_midi(t,&stop,1,3);twain_set_param(t,"b_t3_record","1");
+    twain_set_param(t,"prepare_start","1,0");frames(t,44100);
+    twain_set_param(t,"cancel_start","1");frames(t,88200);
+    twain_get_param(t,"twain_status",json,sizeof json);
+    assert(strstr(json,"\"start_ready\":0") && strstr(json,"\"count_in\":0"));
+    expect(t,"tstates","2,2,0,0");twain_destroy(t);
+    puts("Twain: temporary cursor seeks after native Start, take origins and local count-in cancellation passed");
+}
 int main(void) {
     test_ranges_and_input();
     test_advance_last();
@@ -493,6 +527,7 @@ int main(void) {
 #ifdef MARK_TWAIN
     test_clip_fx();
 #endif
+    test_start_cursor();
     test_armed_record();
     twain_t *t=twain_create(NULL,NULL); assert(t);
     expect(t,"module_id","twain"); expect(t,"track_seconds","60");

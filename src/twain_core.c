@@ -22,6 +22,8 @@ struct twain {
     int clock_running, clock_ticks, cycle_due, transport_stopped, bar_due;
     int armed[TW_SCENES][MARK_TRACKS];
     int count_in, advance_last, click_left; float click_phase;
+    int start_cursor[4], prepared_start, start_scene, start_bar, start_ready;
+    unsigned start_serial; double precount_frames, precount_total;
     int master_level, master_mute, master_editing, master_saved; float master_gain;
     int input_level, monitor_level;
     int input_monitor, monitor_safe, input_clip; float input_peak, warm_z[2];
@@ -37,7 +39,7 @@ twain_t *twain_create(const host_api_v1_t *host, const char *dir) {
     t->pending = -1;
     t->master_level=100; t->master_gain=1;t->input_level=t->monitor_level=100;
     for (int i = 0; i < TW_SCENES; i++) {
-        t->bars[i]=1;
+        t->bars[i]=1;t->start_cursor[i]=-1;
         t->scene[i] = mark_create_in_dir(host, dir);
         if (!t->scene[i]) { twain_destroy(t); return NULL; }
         mark_set_param(t->scene[i], "monitor", "0");
@@ -112,10 +114,10 @@ static void launch_armed(twain_t *t, int scene_start) {
             /* Received clock boundaries, not the initial tempo estimate, close
              * a clocked take. Capacity remains the hard recording limit. */
             double length=t->clock_running ? MARK_SR*60.0 :
-                mark_scene_bar_frames(t->scene[scene])*(t->bars[scene]-t->starts[scene]);
+                mark_scene_bar_frames(t->scene[scene])*(t->bars[scene]-(int)t->phase);
             if(length>MARK_SR*60.0)length=MARK_SR*60.0;
             mark_clip_record(t->scene[scene],i,(uint32_t)(length+0.5));
-            snprintf(key,sizeof key,"t%d_origin",i+1);char origin[8];snprintf(origin,sizeof origin,"%d",t->starts[scene]);mark_set_param(t->scene[scene],key,origin);
+            snprintf(key,sizeof key,"t%d_origin",i+1);char origin[8];snprintf(origin,sizeof origin,"%d",(int)t->phase);mark_set_param(t->scene[scene],key,origin);
         } else {
             snprintf(key,sizeof key,"t%d_%s",i+1,action==3 ? "stop":"btn");
             mark_set_param(t->scene[scene], key, "1");
@@ -180,7 +182,7 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
     if(t->io.identity_enabled && (!t->io.live[0] || strcmp(t->io.live,t->io.loaded))) {
         memset(out,0,(size_t)n*2*sizeof(*out));return;
     }
-    if(t->count_in) { memset(out,0,(size_t)n*2*sizeof(*out));goto master_mix; }
+    if(t->count_in || t->start_ready) { memset(out,0,(size_t)n*2*sizeof(*out));goto master_mix; }
     if(t->transport_stopped) { memset(out,0,(size_t)n*2*sizeof(*out));goto master_mix; }
     if (t->cycle_due) cycle(t);
     else if (t->bar_due) bar_boundary(t);
@@ -208,6 +210,13 @@ void twain_process(twain_t *t, const int16_t *in, int16_t *out, int n) {
 master_mix:;
     float target=t->master_mute?0:t->master_level/100.0f;
     for(int i=0;i<n;i++) {
+        if(t->count_in && t->prepared_start) {
+            int old=(int)(t->precount_frames*4/t->precount_total);
+            t->precount_frames+=1;
+            int beat=(int)(t->precount_frames*4/t->precount_total);
+            if(t->precount_frames>=t->precount_total) {t->count_in=0;t->start_ready=1;}
+            else if(beat!=old) {t->click_left=(int)(MARK_SR*0.008);t->click_phase=0;}
+        }
         t->master_gain+=(target-t->master_gain)*0.002f;
         float click=0;
         if(t->click_left>0) {
@@ -253,6 +262,24 @@ void twain_set_param(twain_t *t, const char *key, const char *val) {
     }
     if(!strcmp(key,"master_edit_begin")) { t->master_editing=1;t->master_saved=0;return; }
     if(!strcmp(key,"master_edit_end")) { t->master_editing=t->master_saved=0;return; }
+    if(!strcmp(key,"prepare_start")) {
+        int scene,bar,used=0;
+        if(t->transport_stopped && sscanf(val,"%d,%d%n",&scene,&bar,&used)==2 && !val[used] && scene>=0 && scene<4) {
+            if(!bar)bar=t->starts[scene]+1;
+            if(bar<t->starts[scene]+1 || bar>t->bars[scene])return;
+            t->start_scene=scene;t->start_bar=bar-1;t->prepared_start=1;t->start_ready=1;
+            t->count_in=0;t->advance_last=0;t->start_serial++;
+            for(int i=0;i<MARK_TRACKS;i++)if(t->armed[scene][i]==4)t->count_in=1;
+            if(t->count_in) {
+                // Native Move remains stopped. Only local clicks/monitoring run.
+                t->start_ready=0;t->precount_frames=0;
+                t->precount_total=fmax(1,mark_scene_bar_frames(t->scene[scene]));
+                t->click_left=(int)(MARK_SR*0.008);t->click_phase=0;
+            }
+        }
+        return;
+    }
+    if(!strcmp(key,"cancel_start")) {t->count_in=t->prepared_start=t->start_ready=t->click_left=0;return;}
     if(!strcmp(key,"advance_last")) {
         double phase=t->clock_running?t->clock_ticks/96.0:t->phase;
         if((!strcmp(val,"1") || !strcmp(val,"trigger")) && !t->transport_stopped && !t->count_in && phase<t->bars[t->active]-1) {
@@ -286,6 +313,11 @@ void twain_set_param(twain_t *t, const char *key, const char *val) {
     int scene = t->active;
     if ((key[0] >= 'a' && key[0] <= 'd') && key[1] == '_') {
         scene = key[0]-'a'; key += 2;
+    }
+    if(!strcmp(key,"start_bar")) {
+        char *end;long bar=strtol(val,&end,10);
+        if(t->transport_stopped && !t->prepared_start && *val && !*end && bar>t->starts[scene] && bar<=t->bars[scene])t->start_cursor[scene]=(int)bar-1;
+        return;
     }
     if (key[0] == 't' && key[1] >= '1' && key[1] <= '8' && key[2] == '_') {
         int layer = key[1] - '1';
@@ -382,10 +414,10 @@ int twain_get_param(twain_t *t, const char *key, char *buf, int n) {
             "{\"scene\":%d,\"pending\":%d,\"bars\":[%d,%d,%d,%d],\"starts\":[%d,%d,%d,%d],\"phase\":%.4f,\"stopped\":%d,\"count_in\":%d,\"advance\":%d,"
             "\"custom\":[%d,%d,%d,%d],\"muted\":[%d,%d,%d,%d],\"master\":%d,\"master_mute\":%d,\"undo\":%d,\"redo\":%d,"
             "\"a\":\"%s\",\"b\":\"%s\",\"c\":\"%s\",\"d\":\"%s\","
-            "\"armed\":%s,\"input\":%.4f,\"clip\":%d,\"monitor\":%d,\"monitor_wanted\":%d,\"monitor_blocked\":%d}",
-            t->active,t->pending,t->bars[0],t->bars[1],t->bars[2],t->bars[3],t->starts[0],t->starts[1],t->starts[2],t->starts[3],phase,t->transport_stopped,t->count_in?4-t->clock_ticks/24:0,t->advance_last,
+            "\"armed\":%s,\"start_ready\":%d,\"start_serial\":%u,\"cursors\":[%d,%d,%d,%d],\"input\":%.4f,\"clip\":%d,\"monitor\":%d,\"monitor_wanted\":%d,\"monitor_blocked\":%d}",
+            t->active,t->pending,t->bars[0],t->bars[1],t->bars[2],t->bars[3],t->starts[0],t->starts[1],t->starts[2],t->starts[3],phase,t->transport_stopped,t->count_in?4-(int)(t->precount_frames*4/t->precount_total):0,t->advance_last,
             custom[0],custom[1],custom[2],custom[3],muted[0],muted[1],muted[2],muted[3],
-            t->master_level,t->master_mute,t->history_count,t->redo_count,state[0],state[1],state[2],state[3],armed,
+            t->master_level,t->master_mute,t->history_count,t->redo_count,state[0],state[1],state[2],state[3],armed,t->start_ready,t->start_serial,t->start_cursor[0],t->start_cursor[1],t->start_cursor[2],t->start_cursor[3],
             t->input_peak,t->input_clip>0,t->input_monitor&&t->monitor_safe,t->input_monitor,t->input_monitor&&!t->monitor_safe);
     }
     if(!strcmp(key,"input_level"))return snprintf(buf,n,"%d",t->input_level);
@@ -413,31 +445,28 @@ int twain_get_param(twain_t *t, const char *key, char *buf, int n) {
 void twain_on_midi(twain_t *t, const uint8_t *msg, int n, int source) {
     tw_io_poll(t);
     if(atomic_load_explicit(&t->io.state,memory_order_acquire)==5)return;
+    int starting=0;
     if (n > 0) {
         if (msg[0] == 0xfa || msg[0] == 0xfb) {
-            int from_stop=t->transport_stopped || !t->clock_running;
-            t->count_in=0;t->advance_last=0;
-            if(from_stop)for(int i=0;i<MARK_TRACKS;i++)if(t->armed[t->active][i]==4)t->count_in=1;
-            t->click_left=t->count_in?(int)(MARK_SR*0.008):0;t->click_phase=0;
-            t->clock_running = 1;
-            t->transport_stopped = 0;
-            t->clock_ticks = t->count_in?0:t->starts[t->active]*96;
-            t->phase = t->starts[t->active];
-            /* Transport restart starts the current scene from bar 1. */
+            int prepared=t->prepared_start;
+            if(prepared) {if(t->active!=t->start_scene)t->io.revision++;t->active=t->start_scene;t->pending=-1;}
+            t->count_in=0;t->advance_last=0;t->start_ready=0;t->prepared_start=0;t->click_left=0;
+            t->clock_running=1;t->transport_stopped=0;
+            t->phase=prepared && t->start_bar>=t->starts[t->active] && t->start_bar<t->bars[t->active]?t->start_bar:t->starts[t->active];
+            t->clock_ticks=(int)t->phase*96;
+            /* A prepared cursor affects Twain only; Move has no exposed seek. */
             mark_scene_cycle(t->scene[t->active]);
-            mark_scene_seek(t->scene[t->active],t->phase*mark_scene_bar_frames(t->scene[t->active]));
+            starting=1;
             t->cycle_due = 0;
-            t->bar_due = !t->count_in;
+            t->bar_due=0;
+            // At an intentional transport start, queued takes start immediately
+            // at the requested bar, not after another scene cycle.
         } else if (msg[0] == 0xfc) {
             t->phase = (double)t->clock_ticks / 96.0;
             t->clock_running = 0;
-            t->transport_stopped = 1;t->count_in=t->advance_last=t->click_left=0;
+            t->transport_stopped = 1;t->count_in=t->advance_last=t->click_left=t->prepared_start=t->start_ready=0;
         } else if (msg[0] == 0xf8 && t->clock_running) {
-            if(t->count_in) {
-                if(++t->clock_ticks>=96) {
-                    t->count_in=0;t->clock_ticks=t->starts[t->active]*96;t->phase=t->starts[t->active];t->bar_due=1;
-                } else if(t->clock_ticks%24==0) { t->click_left=(int)(MARK_SR*0.008);t->click_phase=0; }
-            } else if (++t->clock_ticks >= t->bars[t->active] * 96) t->cycle_due = 1;
+            if (++t->clock_ticks >= t->bars[t->active] * 96) t->cycle_due = 1;
             else if (t->clock_ticks % 96 == 0) t->bar_due = 1;
         }
     }
@@ -445,6 +474,10 @@ void twain_on_midi(twain_t *t, const uint8_t *msg, int n, int source) {
     if(atomic_load(&t->io.state) && (n<=0 || msg[0]<0xf8))return;
     for(int i=0;i<TW_SCENES;i++)
         if(i==t->active || (n>0 && msg[0]>=0xf8))mark_on_midi(t->scene[i],msg,n,source);
+    if(starting) {
+        mark_scene_seek(t->scene[t->active],t->phase*mark_scene_bar_frames(t->scene[t->active]));
+        launch_armed(t,1);
+    }
 }
 
 #include "twain_project_io.inc"

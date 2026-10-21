@@ -1,4 +1,4 @@
-# Twain 0.8.0 prototype
+# Twain 0.10.0 prototype
 
 Twain is a separate overtake module on `twain-prototype`. Mark's module,
 UI, catalog release and build remain separate. Twain uses the hardware input
@@ -26,7 +26,15 @@ of stereo capacity at 44.1 kHz.
   Monitoring remains available. Count-in clicks are not mixed into recordings.
   This is Twain’s fixed count-in; Move’s project count-in setting is not read.
   Starting ordinary playback without armed recordings has no extra count-in.
-  Native tracks follow Move’s own transport and are not held for Twain’s count-in.
+  When starting from Twain, the local count-in keeps native Move stopped.
+  Its Play command is sent once after the final click; the returned native
+  Start begins Twain recording on that downbeat. Press Play again or leave
+  Twain during the countdown to cancel. Starting externally starts armed
+  Twain takes immediately, without adding a second bar of count-in.
+- While stopped, tap a bottom step to mark a temporary start bar for the
+  selected clip’s scene. Shift+Play starts Twain there; ordinary Play starts
+  its active scene at the saved range beginning. This cursor does not change
+  saved ranges or seek native Move tracks: native playback starts normally.
 - While playing, Shift+Play queues a jump to the start of the last scene bar at
   the next bar boundary. Existing clips seek to that position and keep playing.
   The remaining final bar leads into any recording armed for the next cycle;
@@ -58,7 +66,8 @@ of stereo capacity at 44.1 kHz.
   are accepted, including fast double taps with the pad released.
 - Hold Loop and hold two bottom steps to select inclusive start/end bars
   (hold 3, press 5 for bars 3–5). A single step still selects bars 1–N. While Loop is
-  held, a clip column selects the scene to edit, or use Left/Right. Release
+  held, a clip column selects the scene to edit, or use Left/Right. Loop initially
+  follows the selected clip’s scene, even while another scene plays. Release
   Loop to return to normal performance. All four scene lengths are independent.
 - Left/Right in performance moves the requested scene through A–D. Further
   presses move the queued destination; returning to the active scene cancels
@@ -67,24 +76,28 @@ of stereo capacity at 44.1 kHz.
 The current scene finishes its full cycle before switching; the destination
 starts from bar 1 with clip playheads reset. Short clips repeat within a scene.
 MIDI clock uses 96 ticks/bar; without it, host tempo drives sample-accurate
-boundaries. Stop pauses transport; Start/Continue restart at bar 1.
+boundaries. Stop pauses transport; Start/Continue restart at the scene range beginning,
+unless a stopped-playback cursor start was prepared.
 
 ## Screen and pads
 
-The top shows the active scene and Bar 3/8, followed by the project name and visible layer bank.
-The middle shows recording, queued recording/scene, or the parameter being
-adjusted. Twain master volume or a persistent TWN MUTED indicator appears
-above a bottom progress strip. Each outlined segment is one bar, filling
-through that bar's beats; even a one-bar scene has visible beat progress.
-There are no permanent instruction rows. Bottom hardware steps still follow
-the bar/beat and select length while Loop is held.
+The header always names the playing scene and the selected editing clip,
+for example PLAY A / EDIT B3. The main readout gives the current bar and scene
+end in large digits. Selecting an empty B clip while A plays changes the edit
+target without launching B. Holding Loop shows the editing scene's range.
+FX touches/turns temporarily show a large value; record count-in shows its
+remaining beats. The dirty star remains at the top right.
+Twain master volume/mute and monitor status stay above a bottom progress strip.
+Each outlined segment is one bar, filling through its beats. When stopped,
+the selected scene's temporary start cursor highlights its hardware step and
+progress segment. There are no permanent instruction rows.
 
 Empty pads are dim neutral; empty clips with retained settings have a subtle
 scene tint. Recording is red, playing green, stopped amber, and muted clips
 use dim, saturated purple with a slow pulse between the two dark purple palette
 shades, including when selected. Queued actions blink; the queued scene pulses. Held pads turn
 white; the selected clip stays white and its state appears on screen. Loop, Record, Delete, Undo and Mute indicate their availability/state.
-Ordinary Play is forwarded once through the installed host’s
+Play is sent once (after any local count-in) through the installed host’s
 `move_midi_inject_to_move` binding; the manifest no longer passes Play through
 directly, so Shift+Play cannot also stop Move. Twain drives its Play LED.
 A periodic LED refresh repairs native feedback overwrites. Parked Twain skips
@@ -98,9 +111,13 @@ and LED reliability still require a hardware pass.
 ## Input and recording character
 
 Shift+Record toggles monitoring, off by default and reset off on project load.
-The input meter remains visible beside Twain’s volume, including while stopped.
-MON means audible monitoring; X means monitoring is requested but blocked.
-A ! holds briefly when the incoming signal clips. Use headphones for the mic.
+The input meter moves only while monitoring is actually enabled, including
+while stopped. MON OFF keeps the meter and clip warning dark; MON X means
+monitoring was requested but blocked. MON ON shows the post-input-gain meter
+and a brief ! when the source or trimmed signal clips. Recording and internal
+clip detection remain active independently of this display. Monitoring follows
+Move’s selected input (mic/line selection stays native; USB-C selection is
+separate). Use headphones for the mic.
 The guard requires the installed speaker/line-input host bindings; it blocks
 mic monitoring through the speaker, and permits line input or headphones.
 It keeps checking while Twain is parked. Safety changes and monitor toggles use

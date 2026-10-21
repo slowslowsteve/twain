@@ -281,6 +281,7 @@ static void tw_io_poll(twain_t *t) {
             t->active=io->active;t->input_level=io->input_level;t->monitor_level=io->monitor_level;t->master_level=io->master;t->master_mute=io->mute;t->master_gain=0;
             t->pending=-1;t->phase=t->starts[t->active];t->clock_running=t->clock_ticks=t->cycle_due=t->bar_due=0;
             t->transport_stopped=1;t->input_monitor=0;t->count_in=t->advance_last=t->click_left=0;memset(t->armed,0,sizeof t->armed);
+            t->prepared_start=t->start_ready=0;for(int i=0;i<4;i++)t->start_cursor[i]=-1;
             t->history_head=t->history_count=t->redo_count=0;t->gesture_scene=t->gesture_clip=-1;t->gesture_saved=0;
             t->master_editing=t->master_saved=0;
             memcpy(io->loaded,io->target,37);tw_name(io->name,io->target_name);
@@ -298,6 +299,7 @@ static int tw_io_param(twain_t *t,const char *key,const char *val) {
         if(sscanf(val,"%36[^\n]\n%u%n",id,&generation,&used)==2 && tw_uuid(id) && generation && val[used]=='\n') {
             memcpy(io->live,id,37);io->live_gen=generation;tw_name(io->live_name,val+used+1);
         } else { io->live[0]=0;io->live_gen=0; }
+        if(!io->live[0] || strcmp(io->live,io->loaded))t->count_in=t->prepared_start=t->start_ready=t->click_left=0;
         return 1;
     }
     if(!strcmp(key,"project_dir")) {
