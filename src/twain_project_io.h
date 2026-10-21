@@ -8,6 +8,11 @@ typedef struct {
     char id[37], name[128];
 } tw_project_entry;
 typedef struct {
+    tw_project_entry entry;
+    unsigned long long bytes, device, inode;
+    long long modified, modified_ns;
+} tw_orphan_entry;
+typedef struct {
     pthread_t thread; int started;
     atomic_int stop, state; /* 0 idle, 1 request, 2 working, 3 ready, 4 cleanup, 5 commit, 6 committed */
     int op, result, identity_enabled; unsigned serial;
@@ -19,6 +24,10 @@ typedef struct {
     mark_clip_snapshot_t clips[4][MARK_TRACKS];
     int16_t *staged[4][MARK_TRACKS];
     tw_project_entry catalog[TW_CATALOG]; int catalog_count;
+    char native_root[400];
+    tw_orphan_entry orphans[TW_CATALOG];
+    int orphan_count, removed_count; unsigned cleanup_serial;
+    unsigned long long orphan_bytes;
 } tw_project_io;
 static int tw_io_init(twain_t *);
 static void tw_io_destroy(twain_t *);

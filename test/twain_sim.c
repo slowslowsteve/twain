@@ -194,6 +194,32 @@ static void test_clip_fx(void) {
         if(effect>=5)assert(tail>100);
         free(f);
     }
+    /* Filters sustain a bounded tone without input at maximum resonance,
+     * and the LP passband retains bass below cutoff at musical resonance. */
+    for(int effect=0;effect<2;effect++) {
+        twain_fx_t *f=calloc(1,sizeof *f);assert(f);
+        f->value[effect]=50;f->secondary[effect]=100;f->dirty=1;twain_fx_prepare(f);
+        double tail=0;
+        for(int n=0;n<MARK_SR*2;n++) {
+            float l=0,r=0;twain_fx_run(f,&l,&r,88200);
+            assert(isfinite(l) && fabsf(l)<=32768);
+            if(n>MARK_SR)tail+=l*l;
+        }
+        assert(tail/MARK_SR>100);free(f);
+    }
+    twain_fx_t *bass=calloc(1,sizeof *bass);assert(bass);
+    bass->value[1]=50;bass->secondary[1]=80;bass->dirty=1;twain_fx_prepare(bass);
+    double bassIn=0,bassOut=0;
+    for(int n=0;n<MARK_SR;n++) {
+        float x=1000*sinf(6.2831853f*80*n/MARK_SR),l=x,r=x;twain_fx_run(bass,&l,&r,88200);
+        if(n>MARK_SR/2) { bassIn+=x*x;bassOut+=l*l; }
+    }
+    assert(bassOut>bassIn*0.85 && bassOut<bassIn*1.2);free(bass);
+    twain_fx_t *compressor=calloc(1,sizeof *compressor);assert(compressor);
+    compressor->secondary[2]=0;compressor->dirty=1;twain_fx_prepare(compressor);
+    float fast=compressor->release,attack=compressor->attack;
+    compressor->secondary[2]=100;compressor->dirty=1;twain_fx_prepare(compressor);
+    assert(compressor->release<fast/40 && compressor->attack==attack);free(compressor);
     /* Feedback is independent of send; higher feedback sustains more repeats. */
     double persistence[2]={0};
     for(int setting=0;setting<2;setting++) {

@@ -11,7 +11,7 @@
 #include "twain_project_io.h"
 #define TW_HISTORY 5
 #define TW_SCENES 4
-static const char *clip_settings[19]={"level","hp","lp","comp","sat","chorus","reverb","delay","delay_rate","mute","hp_res","lp_res","comp_attack","sat_dirt","chorus_rate","reverb_decay","delay_feedback","delay_wow","origin"};
+static const char *clip_settings[19]={"level","hp","lp","comp","sat","chorus","reverb","delay","delay_rate","mute","hp_res","lp_res","comp_release","sat_dirt","chorus_rate","reverb_decay","delay_feedback","delay_wow","origin"};
 typedef struct {
     int scene, clip, kind, bars, start; /* 0 settings, 1 audio+settings, 2 length, 3 master level, 4 master mute */
     mark_clip_snapshot_t saved;
@@ -303,7 +303,7 @@ void twain_set_param(twain_t *t, const char *key, const char *val) {
             t->armed[scene][layer]=0;
             mark_set_param(t->scene[scene],key,val); return;
         }
-        for(int i=0;i<19;i++)if(!strcmp(key+3,clip_settings[i])) {
+        for(int i=0;i<19;i++)if(!strcmp(key+3,clip_settings[i]) || (i==12 && !strcmp(key+3,"comp_attack"))) {
             int max=i==0?200:i==8?11:i==9?1:i==18?15:100;
             char *end; long next=strtol(val,&end,10);
             if(!*val || *end)return;

@@ -84,7 +84,7 @@ int main(void) {
             snprintf(key,sizeof key,"%c_t%d_lp",'a'+scene,clip);snprintf(value,sizeof value,"%d",scene*10+clip);twain_set_param(t,key,value);
             const char *fx[]={"hp","comp","sat","chorus","reverb","delay"};
             for(int effect=0;effect<6;effect++) { snprintf(key,sizeof key,"%c_t%d_%s",'a'+scene,clip,fx[effect]);twain_set_param(t,key,value); }
-            const char *secondary[]={"hp_res","lp_res","comp_attack","sat_dirt","chorus_rate","reverb_decay","delay_feedback","delay_wow"};
+            const char *secondary[]={"hp_res","lp_res","comp_release","sat_dirt","chorus_rate","reverb_decay","delay_feedback","delay_wow"};
             for(int effect=0;effect<8;effect++) { snprintf(key,sizeof key,"%c_t%d_%s",'a'+scene,clip,secondary[effect]);twain_set_param(t,key,value); }
             snprintf(key,sizeof key,"%c_t%d_level",'a'+scene,clip);twain_set_param(t,key,"73");
             snprintf(key,sizeof key,"%c_t%d_delay_rate",'a'+scene,clip);twain_set_param(t,key,"6");
@@ -117,7 +117,7 @@ int main(void) {
         char k[32],v[16];snprintf(k,sizeof k,"%c_t%d_lp",'a'+scene,clip);snprintf(v,sizeof v,"%d",scene*10+clip);expect(t,k,v);
         const char *fx[]={"hp","comp","sat","chorus","reverb","delay"};
         for(int effect=0;effect<6;effect++) { snprintf(k,sizeof k,"%c_t%d_%s",'a'+scene,clip,fx[effect]);expect(t,k,v); }
-        const char *secondary[]={"hp_res","lp_res","comp_attack","sat_dirt","chorus_rate","reverb_decay","delay_feedback","delay_wow"};
+        const char *secondary[]={"hp_res","lp_res","comp_release","sat_dirt","chorus_rate","reverb_decay","delay_feedback","delay_wow"};
         for(int effect=0;effect<8;effect++) { snprintf(k,sizeof k,"%c_t%d_%s",'a'+scene,clip,secondary[effect]);expect(t,k,v); }
         snprintf(k,sizeof k,"%c_t%d_delay_rate",'a'+scene,clip);expect(t,k,"6");
         snprintf(k,sizeof k,"%c_t%d_level",'a'+scene,clip);expect(t,k,"73");
@@ -151,7 +151,7 @@ int main(void) {
     legacy_copy(fileA,fileB,8);twain_set_param(t,"project_load",B);wait_job(t,0);
     for(int scene=0;scene<4;scene++)for(int clip=1;clip<=8;clip++) {
         char k[32],v[16];snprintf(k,sizeof k,"%c_t%d_lp",'a'+scene,clip);snprintf(v,sizeof v,"%d",scene*10+clip);expect(t,k,v);
-        snprintf(k,sizeof k,"%c_t%d_comp_attack",'a'+scene,clip);expect(t,k,"35");
+        snprintf(k,sizeof k,"%c_t%d_comp_release",'a'+scene,clip);expect(t,k,"35");
     }
     // Replacing an occupied workspace with a new project reuses buffers but
     // clears every clip, including the layers omitted by legacy saves.
@@ -161,6 +161,35 @@ int main(void) {
         snprintf(k,sizeof k,"%c_t%d_lp",'a'+scene,clip);expect(t,k,"0");
         snprintf(k,sizeof k,"%c_t%d_level",'a'+scene,clip);expect(t,k,"50");
     }
+    // Cleanup requires a readable native inventory, a preview token and a
+    // final recheck. Reappearing projects and changed files block deletion.
+    char native[512],nativeA[600],nativeC[600],fileC[600],summary[256],token[32];
+    const char *C="bb2402f6-dc58-43e5-b7aa-d93e16e52ab6";
+    snprintf(native,sizeof native,"%s/native",root);assert(!mkdir(native,0755));
+    snprintf(nativeA,sizeof nativeA,"%s/%s",native,A);assert(!mkdir(nativeA,0755));
+    twain_set_param(t,"project_native_dir",native);
+    snprintf(fileC,sizeof fileC,"%s/%s.twp",root,C);
+    // Valid independent orphan fixture (copy then undo the corruption helper).
+    copy_corrupt(fileA,fileC);FILE *fix=fopen(fileC,"r+b");assert(fix);
+    assert(!fseek(fix,-1,SEEK_END));int byte=fgetc(fix);assert(!fseek(fix,-1,SEEK_END));fputc(byte^0xff,fix);fclose(fix);
+    twain_set_param(t,"project_cleanup_delete","1");wait_job(t,9);assert(!access(fileC,F_OK));
+    twain_set_param(t,"project_cleanup_preview","1");wait_job(t,0);
+    twain_get_param(t,"project_cleanup_summary",summary,sizeof summary);
+    unsigned serial;int count;assert(sscanf(summary,"%u\t%d",&serial,&count)==2 && count==1);
+    snprintf(token,sizeof token,"%u",serial);
+    snprintf(nativeC,sizeof nativeC,"%s/%s",native,C);assert(!mkdir(nativeC,0755));
+    twain_set_param(t,"project_cleanup_delete",token);wait_job(t,9);assert(!access(fileC,F_OK));rmdir(nativeC);
+    twain_set_param(t,"project_cleanup_preview","1");wait_job(t,0);
+    twain_get_param(t,"project_cleanup_summary",summary,sizeof summary);sscanf(summary,"%u",&serial);snprintf(token,sizeof token,"%u",serial);
+    fix=fopen(fileC,"ab");assert(fix);fputc(0,fix);fclose(fix);
+    twain_set_param(t,"project_cleanup_delete",token);wait_job(t,9);assert(!access(fileC,F_OK));
+    twain_set_param(t,"project_cleanup_preview","1");wait_job(t,0);
+    twain_get_param(t,"project_cleanup_summary",summary,sizeof summary);sscanf(summary,"%u",&serial);snprintf(token,sizeof token,"%u",serial);
+    twain_set_param(t,"project_cleanup_delete",token);wait_job(t,0);
+    assert(access(fileC,F_OK) && !access(fileA,F_OK) && !access(fileB,F_OK));
+    twain_set_param(t,"project_cleanup_delete",token);wait_job(t,9);
+    rmdir(nativeA);rmdir(native);
+    twain_set_param(t,"project_cleanup_preview","1");wait_job(t,8);
     twain_destroy(t);unlink(fileA);unlink(fileB);unlink(bad);rmdir(root);
     puts("Twain projects: all 32 clips round-trip, legacy 16-clip loading, CRC failure isolation, duplicate copy, late identity change and failed-save recovery passed");
 }

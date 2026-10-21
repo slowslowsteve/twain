@@ -1,0 +1,47 @@
+--- a/src/host/shadow_set_pages.c
++++ b/src/host/shadow_set_pages.c
+@@ -15,6 +15,7 @@
+ #include <errno.h>
+ #include <pthread.h>
+ #include <time.h>
++#include <stdatomic.h>
+ 
+ #include "shadow_set_pages.h"
+ #include "child_signals.h"
+@@ -416,7 +417,8 @@
+  * Only small writes (active_set.txt) and tempo read remain here. */
+ /* The generation of the read being consumed, and of the SET_CHANGED last
+  * raised -- all on the SPI thread, which is the only caller of both. */
+-static uint32_t s_consume_gen, s_published_gen, s_acked_gen;
++static uint32_t s_consume_gen, s_acked_gen;
++static _Atomic uint32_t s_published_gen;
+ static int s_consume_settled;
+ 
+ uint32_t shadow_set_pages_published_gen(void) { return s_published_gen; }
+@@ -436,9 +438,14 @@
+          * letting autosave write into the wrong folder. */
+         if (s_consume_gen && s_consume_settled && *host.shadow_control_ptr &&
+             s_acked_gen == s_published_gen &&
+-            (*host.shadow_control_ptr)->set_doc_gen != s_consume_gen &&
+-            !((*host.shadow_control_ptr)->ui_flags & SHADOW_UI_FLAG_SET_CHANGED))
++            !((*host.shadow_control_ptr)->ui_flags & SHADOW_UI_FLAG_SET_CHANGED)) {
+             (*host.shadow_control_ptr)->set_doc_gen = s_consume_gen;
++            /* The public active_set response must name the same generation
++             * as the settled model, even for boot/reload of the same UUID.
++             * No UI switch is pending; carry its acknowledgement forward. */
++            s_published_gen = s_consume_gen;
++            s_acked_gen = s_consume_gen;
++        }
+         return;
+     }
+     s_published_gen = s_consume_gen;
+@@ -627,7 +634,8 @@
+      * republish is what lets the consume align it as "same set". */
+     if (song_index == sampler_last_song_index &&
+         song_index != sampler_pending_song_index &&
+-        !move_model_sync_misaligned()) {
++        !move_model_sync_misaligned() &&
++        (!move_model_sync_active() || s_published_gen == move_model_sync_gen())) {
+         return;
+     }
+ 

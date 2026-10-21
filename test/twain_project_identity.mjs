@@ -6,6 +6,7 @@ assert.deepEqual(probe(`${id}\nTest\n7`),{ready:true,id,name:'Test',generation:7
 for(const raw of [null,'',`${id}\nTest`,`${id}\nTest\n6`,'__pending-1\nNew Set\n7','../../wrong\nTest\n7'])
     assert.equal(probe(raw).ready,false);
 for(const model of [null,[0,0,0],[1,8,7],[1,0,0]])assert.equal(probe(`${id}\nTest\n7`,model).ready,false);
+assert.equal(probe(`${id}\nTest\n0`,[1,1,1]).reason,'startup project identity needs refresh');
 let count=0;
 assert.equal(probeProjectIdentity({readModel:()=>[1,++count, count],readActive:()=>`${id}\nTest\n1`}).ready,false);
 assert.equal(probeProjectIdentity({readModel:()=>{throw Error('offline');}}).ready,false);

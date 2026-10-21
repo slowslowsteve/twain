@@ -93,3 +93,29 @@ console.log('Twain project UI: dropped identity retry, stale-result isolation, s
   assert.equal(c.view().mode,'error');assert.equal(c.view().detail,'Move link busy');
  } finally {Date.now=savedNow;}
 }
+
+// Cleanup is preview-only until a separate, default-to-keep confirmation.
+{
+ const s={id:A,dirty:0,busy:0,result:0,serial:1},sent=[];
+ let job='',incomplete=false;
+ const c=createProjectController({probe:()=>({ready:true,id:A,name:'Set A',generation:1}),
+  get:k=>k==='project_status'?JSON.stringify(s):k==='project_catalog_count'?'0':
+   k==='project_cleanup_summary'?'91\t1\t2097152\t1':
+   k==='project_cleanup_entry_0'?(incomplete?'':`${B}\tDeleted project\t2097152`):'Set A',
+  set:(k,v)=>{sent.push([k,v]);if(k==='project_live')return true;job=k;s.serial++;s.busy=1;return true;}});
+ const finish=(result=0)=>{s.busy=0;s.result=result;c.tick(true);};
+ c.tick(true);c.click(true);assert.equal(job,'project_catalog');finish();
+ c.move(1);assert.equal(c.view().choice,'Clean up unused saves');c.click();
+ assert.equal(job,'project_cleanup_preview');finish();assert.equal(c.view().choice,'Deleted project');
+ assert.equal(c.view().detail,'2.0 MB total');
+ assert(!sent.some(([k])=>k==='project_cleanup_delete'));
+ c.move(1);c.click();assert.equal(c.view().choice,'Keep saves');c.click();
+ assert(!sent.some(([k])=>k==='project_cleanup_delete'));
+ c.click();c.move(1);assert.equal(c.view().choice,'Delete these saves');c.click();
+ assert.deepEqual(sent.at(-1),['project_cleanup_delete','91']);finish(9);
+ assert.equal(c.view().choice,'Scan unused saves');c.click();assert.equal(job,'project_cleanup_preview');
+ finish(8);assert.equal(c.view().detail,'Move sets unavailable');
+ c.click();incomplete=true;finish();assert.equal(c.view().mode,'error');
+ assert.equal(c.view().detail,'Move link busy'); // incomplete names cannot authorize deletion
+}
+console.log('Twain cleanup UI: names and size preview, explicit default-to-keep confirmation and rescan recovery passed');

@@ -10,7 +10,8 @@ endif
 
 .PHONY: test test-ui arm clean
 
-test: build/host_sim build/twain_sim build/twain_projects_sim test-ui
+test: build/host_sim build/twain_sim build/twain_projects_sim build/schwung_startup_generation test-ui
+	./build/schwung_startup_generation
 	./build/host_sim
 	./build/twain_sim
 	./build/twain_projects_sim
@@ -56,9 +57,13 @@ twain-arm:
 twain-sanitize:
 	$(CC) $(CFLAGS) $(TWAIN_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer src/mark_core.c src/twain_core.c test/twain_sim.c -o build/twain_sanitize -lm -lpthread
 	./build/twain_sanitize
-	$(CC) $(CFLAGS) $(TWAIN_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer src/mark_core.c src/twain_core.c test/twain_projects_sim.c -o build/twain_projects_sanitize -lm -lpthread
+	$(CC) $(CFLAGS) $(TWAIN_FLAGS) -DTWAIN_TESTING -fsanitize=address,undefined -fno-omit-frame-pointer src/mark_core.c src/twain_core.c test/twain_projects_sim.c -o build/twain_projects_sanitize -lm -lpthread
 	./build/twain_projects_sanitize
 
 build/twain_projects_sim: src/mark_core.c src/mark_core.h src/twain_core.c src/twain_core.h src/twain_project_io.h src/twain_project_io.inc src/twain_fx.h test/twain_projects_sim.c
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(TWAIN_FLAGS) src/mark_core.c src/twain_core.c test/twain_projects_sim.c -o $@ -lm -lpthread
+	$(CC) $(CFLAGS) $(TWAIN_FLAGS) -DTWAIN_TESTING src/mark_core.c src/twain_core.c test/twain_projects_sim.c -o $@ -lm -lpthread
+
+build/schwung_startup_generation: test/schwung_startup_generation.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) test/schwung_startup_generation.c -o $@

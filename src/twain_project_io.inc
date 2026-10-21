@@ -159,6 +159,67 @@ static int tw_catalog(tw_project_io *io) {
     }
     closedir(dir);qsort(io->catalog,(size_t)io->catalog_count,sizeof io->catalog[0],tw_catalog_compare);return 0;
 }
+/* Inventory failure always blocks cleanup. UUID directory existence is
+ * conservative: an incomplete/restoring native project protects its save too. */
+static long long tw_stat_ns(const struct stat *s) {
+#ifdef __APPLE__
+    return s->st_mtimespec.tv_nsec;
+#else
+    return s->st_mtim.tv_nsec;
+#endif
+}
+static int tw_native_inventory(tw_project_io *io) {
+    DIR *dir=opendir(io->native_root);if(!dir)return 0;
+    struct dirent *e;int found=0;
+    while((e=readdir(dir)))if(tw_uuid(e->d_name)) {
+        char p[480];struct stat st;snprintf(p,sizeof p,"%s/%s",io->native_root,e->d_name);
+        if(!lstat(p,&st) && S_ISDIR(st.st_mode))found=1;
+    }
+    int okay=!closedir(dir);return found && okay;
+}
+static int tw_native_absent(tw_project_io *io,const char *id) {
+    char p[480];struct stat st;snprintf(p,sizeof p,"%s/%s",io->native_root,id);
+    return lstat(p,&st)!=0 && errno==ENOENT;
+}
+static int tw_cleanup(twain_t *t,int deleting) {
+    tw_project_io *io=&t->io;io->removed_count=0;
+    if(!tw_native_inventory(io))return 8;
+    if(!deleting) {
+        io->orphan_count=0;io->orphan_bytes=0;io->cleanup_serial=0;
+        DIR *dir=opendir(io->root);if(!dir)return errno==ENOENT?0:3;
+        struct dirent *e;
+        while((e=readdir(dir))) {
+            if(strlen(e->d_name)!=40 || strcmp(e->d_name+36,".twp"))continue;
+            char id[37];memcpy(id,e->d_name,36);id[36]=0;
+            if(!tw_uuid(id) || !strcmp(id,io->loaded) || !strcmp(id,io->target) || !tw_native_absent(io,id))continue;
+            if(io->orphan_count==TW_CATALOG)break; /* bounded batches */
+            char path[480];struct stat st;snprintf(path,sizeof path,"%s/%s",io->root,e->d_name);
+            if(lstat(path,&st) || !S_ISREG(st.st_mode))continue;
+            FILE *f=fopen(path,"rb");if(!f)continue;
+            tw_project_io header={0};tw_stream stream={f,0xffffffffu,0,0};
+            int valid=tw_header(&stream,&header,1);fclose(f);if(!valid)continue;
+            tw_orphan_entry *out=&io->orphans[io->orphan_count++];
+            memcpy(out->entry.id,id,37);tw_name(out->entry.name,header.job_name);
+            out->bytes=(unsigned long long)st.st_size;out->device=st.st_dev;
+            out->inode=st.st_ino;out->modified=st.st_mtime;out->modified_ns=tw_stat_ns(&st);io->orphan_bytes+=out->bytes;
+        }
+        int failed=closedir(dir);if(failed)return 3;
+        io->cleanup_serial=io->serial;return 0;
+    }
+    /* Recheck the entire preview before deleting any file. Recheck each one
+     * again just before unlink; a returning native project protects its save. */
+    for(int pass=0;pass<2;pass++)for(int i=0;i<io->orphan_count;i++) {
+        tw_orphan_entry *e=&io->orphans[i];char path[480];struct stat st;
+        snprintf(path,sizeof path,"%s/%s.twp",io->root,e->entry.id);
+        if(!strcmp(e->entry.id,io->loaded) || !strcmp(e->entry.id,io->target) ||
+           !tw_native_absent(io,e->entry.id) || lstat(path,&st) || !S_ISREG(st.st_mode) ||
+           (unsigned long long)st.st_dev!=e->device || (unsigned long long)st.st_ino!=e->inode ||
+           (unsigned long long)st.st_size!=e->bytes || st.st_mtime!=e->modified || tw_stat_ns(&st)!=e->modified_ns)return 9;
+        if(pass) { if(!tw_native_inventory(io))return 8;if(unlink(path))return 3;io->removed_count++; }
+    }
+    io->cleanup_serial=0;int fd=open(io->root,O_RDONLY);
+    if(fd<0)return 3;int failed=fsync(fd);close(fd);return failed?3:0;
+}
 static void *tw_worker(void *arg) {
     twain_t *t=arg;tw_project_io *io=&t->io;
     struct sched_param normal={0};(void)pthread_setschedparam(pthread_self(),SCHED_OTHER,&normal);
@@ -175,6 +236,7 @@ static void *tw_worker(void *arg) {
             if(io->op==1)io->result=tw_file(t,1);
             else if(io->op==2)io->result=tw_file(t,0);
             else if(io->op==3)io->result=tw_catalog(io);
+            else if(io->op==5 || io->op==6)io->result=tw_cleanup(t,io->op==6);
             else {
                 io->result=0;
                 for(int i=0;i<4;i++) {
@@ -198,6 +260,7 @@ static void *tw_worker(void *arg) {
 static int tw_io_init(twain_t *t) {
     tw_project_io *io=&t->io;
     snprintf(io->root,sizeof io->root,"/data/UserData/schwung/twain-projects");
+    snprintf(io->native_root,sizeof io->native_root,"/data/UserData/UserLibrary/Sets");
     if(pthread_create(&io->thread,NULL,tw_worker,t))return 0;
     io->started=1;return 1;
 }
@@ -241,10 +304,23 @@ static int tw_io_param(twain_t *t,const char *key,const char *val) {
         if(!atomic_load(&io->state) && val[0]=='/' && strlen(val)<sizeof io->root-1)snprintf(io->root,sizeof io->root,"%s",val);
         return 1;
     }
-    int op=!strcmp(key,"project_save")?1:!strcmp(key,"project_load")?2:!strcmp(key,"project_catalog")?3:!strcmp(key,"project_new")?4:0;
+    if(!strcmp(key,"project_native_dir")) {
+        /* Simulator injection only: device builds never accept a different
+         * native inventory root through the module protocol. */
+#ifdef TWAIN_TESTING
+        if(!atomic_load(&io->state) && val[0]=='/' && strlen(val)<sizeof io->native_root-1)
+            snprintf(io->native_root,sizeof io->native_root,"%s",val);
+#endif
+        return 1;
+    }
+    int op=!strcmp(key,"project_save")?1:!strcmp(key,"project_load")?2:!strcmp(key,"project_catalog")?3:!strcmp(key,"project_new")?4:!strcmp(key,"project_cleanup_preview")?5:!strcmp(key,"project_cleanup_delete")?6:0;
     if(!op)return !strncmp(key,"project_",8); /* no inherited session fallback */
     if(atomic_load(&io->state))return 1;
     io->serial++;io->result=0;
+    if(op==6) {
+        char *end;unsigned long token=strtoul(val,&end,10);
+        if(!*val || *end || !io->cleanup_serial || token!=io->cleanup_serial) { io->result=9;return 1; }
+    }
     if(op!=3 && (!tw_uuid(io->live) || (op==1 && !tw_uuid(io->loaded)))) { io->result=7;return 1; }
     if(op==2 && !tw_uuid(val)) { io->result=7;return 1; }
     for(int i=0;i<4;i++) {
@@ -267,6 +343,13 @@ static int tw_io_get(twain_t *t,const char *key,char *buf,int n) {
     if(!strcmp(key,"project_status"))return snprintf(buf,n,
         "{\"id\":\"%s\",\"dirty\":%d,\"busy\":%d,\"result\":%d,\"serial\":%u}",
         io->loaded,io->revision!=io->saved_revision,busy,busy?0:io->result,io->serial);
+    if(!strcmp(key,"project_cleanup_summary"))return snprintf(buf,n,"%u\t%d\t%llu\t%d",busy?0:io->cleanup_serial,busy?0:io->orphan_count,busy?0:io->orphan_bytes,busy?0:io->removed_count);
+    if(!strncmp(key,"project_cleanup_entry_",22)) {
+        char *end;long i=strtol(key+22,&end,10);
+        if(!busy && !*end && i>=0 && i<io->orphan_count)
+            return snprintf(buf,n,"%s\t%s\t%llu",io->orphans[i].entry.id,io->orphans[i].entry.name,io->orphans[i].bytes);
+        return snprintf(buf,n,"");
+    }
     if(!strcmp(key,"project_name"))return snprintf(buf,n,"%s",io->name);
     if(!strcmp(key,"project_catalog_count"))return snprintf(buf,n,"%d",busy?0:io->catalog_count);
     if(!strncmp(key,"project_catalog_",16)) {

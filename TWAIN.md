@@ -129,18 +129,18 @@ The main knobs and Shift layer are always assigned to the selected clip:
 |---|---|---|
 | 1 | HP cutoff (bypass at zero) | HP resonance |
 | 2 | LP cutoff (bypass at zero) | LP resonance |
-| 3 | Compression amount + automatic makeup | Attack, 0.1–100 ms |
+| 3 | Compression amount + automatic makeup | Release, 25 ms–1.2 s |
 | 4 | Drive wet amount | Dirt / drive intensity |
 | 5 | Chorus wet amount | Rate, 0.05–8.05 Hz |
 | 6 | Reverb send | Decay, 0.2–20 seconds |
 | 7 | Delay send | Feedback, 0–99.5% |
 | 8 | Quantized delay time | Delay wow/flutter |
 
-HP and LP are warm, resonant two-pole (12 dB/octave) filters inspired by the
+HP and LP are nonlinear, twice-oversampled two-pole (12 dB/octave) filters inspired by the
 requested MS-20 character; they are not a circuit-exact MS-20 emulation.
 Drive keeps four-times interpolated soft clipping, DC removal and RMS
 compensation. Dirt is independent of wet amount. Compression retains its
-12:1 curve and up to 18 dB makeup; attack changes transient response.
+12:1 curve and up to 18 dB makeup; a fixed 0.3 ms attack catches peaks and Shift controls release (25 ms–1.2 s).
 Reverb uses eight damped combs and four allpass diffusers per channel.
 Delay feedback is independent of send and stays below unity, with damping
 and gentle limiting inside the feedback loop. Wow/flutter modulates only
@@ -215,16 +215,18 @@ The worker writes a versioned, capacity/range-checked, little-endian format
 with CRC32 over metadata and PCM, then fsyncs the temporary file and atomically
 renames it before syncing the directory. The previous file remains in place
 until rename; a directory-sync error is reported even if rename succeeded.
-Loading allocates and verifies all four private engines before exchanging
-scene pointers at a render boundary. Old engines are released on the worker.
-Dirty work remains intact on any parse/CRC/allocation/read failure. Generation
-checks reject a changed target before publishing the staged project.
+Loading stages only saved PCM and metadata, checks the complete CRC, then
+copies it into existing full-capacity buffers on the worker under an exclusive
+engine handoff. Dirty work remains intact on any parse/CRC/allocation/read
+failure. Generation checks reject a changed target before committing the staged
+project.
 
 No file I/O, buffer copying or allocation occurs on render. A persistent worker
 is created with Twain. Saves borrow stable audio buffers while mutation is
-locked; loads temporarily need roughly another 510 MiB for private engines
-on top of the approximately 561 MiB normal audio/FX/undo budget. Allocation
-fails safely rather than reducing 60-second capacity. Version-1 four- and eight-layer saves load with their original audio and
+locked; loads temporarily reserve only actual saved PCM, above the approximately
+561 MiB normal audio/FX/undo budget. Empty project creation needs no duplicate
+audio bank. Allocation fails safely rather than reducing 60-second capacity.
+Version-1 four- and eight-layer saves load with their original audio and
 levels intact, default Shift FX settings and start bar 1. Version-2 saves
 include ranges, per-clip recording origins, Shift FX and input/monitor levels;
 older Twain versions cannot open those new saves. Save before upgrading
@@ -247,3 +249,35 @@ and upload that tar.gz. Save Twain before a later restart; only completed Twain 
 When first upgrading from 0.4, existing RAM-only recordings cannot be migrated
 by this package and will be lost on restart.
 Launch through the existing Tools/overtake menu. Builds never deploy to Move.
+
+## 0.9.0: sound and unused-save cleanup
+
+Shift + compressor knob controls **Release**, with a fixed 0.3 ms attack.
+The stored secondary percentage remains in the same file slot; existing attack
+percentages become release percentages. `comp_attack` remains a protocol alias
+for old controllers, but now means release. Older Twain versions interpret that
+slot as attack; downgrading changes its meaning.
+
+HP/LP resonance now reaches bounded self-oscillation. LP passband gain is not
+reduced as resonance rises; HP still removes bass below cutoff by design.
+These are MS-20-inspired nonlinear filters, not a circuit-exact MS-20 model.
+Drive uses smoother rounded clipping and controlled RMS level, from warmth to
+strong distortion. Reverb diffuses the initial attack before its longer,
+irregular resonators, with a stronger room return. Musical quality and maximum
+FX CPU load still need listening/performance checks on Move.
+
+**Shift + main jog → Clean up unused saves** scans without deleting anything.
+Scroll through names and total size, select **Review deletion**, then explicitly
+choose **Delete these saves** (the default is **Keep saves**). At most 64 saves
+are included per batch. The current workspace and current Move project are
+excluded. Existing native UUID folders protect their saves, even if incomplete.
+An unavailable/empty native inventory blocks cleanup. Deleted/changed files or
+returning native projects invalidate the deletion preview; rescan before trying
+again. No save is removed automatically. Cleanup does not touch native projects
+or unsaved clips, and does not create a trash backup of confirmed deletions.
+
+The startup generation fix is a **separate proposed Schwung host patch** under
+`patches/schwung/`. It is not bundled in the Twain module and has not been
+installed on hardware. Twain retains its identity gate and displays **Reopen
+Move project** for the observed boot generation-zero mismatch. Until the host
+patch is integrated/tested, switch to another Move project and back to refresh.

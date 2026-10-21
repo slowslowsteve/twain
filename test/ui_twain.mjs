@@ -209,3 +209,10 @@ assert.equal(params.get('input_monitor'),priorMon); // monitor adjustment doesn'
 console.log('Twain UI: quick selected taps, Shift FX, scene range chord and independent input/monitor levels passed');
 
 state.scene=0;state.starts[0]=2;state.bars[0]=5;state.phase=0.5;state.count_in=4;text.length=0;context.onResume();assert(text.includes('A Bar 3/5'));
+
+// Compressor secondary displays the implemented release time, not old attack units.
+state.count_in=0;
+cc(49);down(93);up(93);cc(49,0);params.set('b_t1_comp_release','99');
+text.length=0;cc(49);cc(73,1);cc(49,0);
+assert.equal(params.get('b_t1_comp_release'),'100');
+assert(text.some(s=>s.includes('1200 ms')),JSON.stringify(text));

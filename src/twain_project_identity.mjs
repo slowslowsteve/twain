@@ -18,7 +18,7 @@ export function probeProjectIdentity({readModel,readActive}={}) {
         const [id,name,generation]=raw.split('\n');
         if(!UUID.test(id || ''))return {ready:false,reason:'project has no persistent ID yet'};
         if(!generation || !/^\d+$/.test(generation) || Number(generation)!==after[1])
-            return {ready:false,reason:'project identity is stale or unversioned'};
+            return {ready:false,reason:generation==='0'?'startup project identity needs refresh':'project identity is stale or unversioned'};
         return {ready:true,id:id.toLowerCase(),name:name || '',generation:after[1]};
     } catch (_) { return {ready:false,reason:'project query failed'}; }
 }
